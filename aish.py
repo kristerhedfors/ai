@@ -322,6 +322,12 @@ class InteractiveShell(cmd.Cmd):
         parser_sum.add_argument("y", type=int)
         parser_sum.set_defaults(func=self.do_sum)
 
+        # ask
+        parser_ask = subparsers.add_parser("ask")
+        # accept arbitrary length of arguments
+        parser_ask.add_argument("question", nargs=argparse.REMAINDER)
+        parser_ask.set_defaults(func=self.do_ask)
+
         # summarize_file
         parser_summarize_file = subparsers.add_parser("summarize_file")
         parser_summarize_file.add_argument("filename", type=str)
@@ -341,6 +347,7 @@ class InteractiveShell(cmd.Cmd):
         self.completion_map = {
             "greet": ["Alice", "Bob", "Charlie"],
             "sum": [str(i) for i in range(10)],
+            "ask": ["What", "When", "Where", "Why", "How"],
             "summarize_file": glob.glob('*'),
             "update_file": glob.glob('*'),
             "update_function": glob.glob('*')
@@ -375,6 +382,38 @@ class InteractiveShell(cmd.Cmd):
             return [i for i in self.completion_map["sum"] if i.startswith(text)]
         else:
             return self.completion_map["sum"]
+    
+    #
+    # ask
+    #
+    def do_ask(self, args):
+        '''Asks a question to the AI.'''
+        if isinstance(args, str):
+            args = self.parser.parse_args(f'ask {args}'.split())
+        question = ' '.join(args.question)
+        answer = GPT().ask(question)
+        print(answer)
+    
+    def complete_ask(self, text, line, begidx, endidx):
+        '''Suggest three alternative words for the next word of the command, fetched from GPT().ask(command)'''
+        if not text:
+            return self.completion_map["ask"]
+        question = ' '.join(args.question)
+        answer = GPT().ask('Suggest six completion alternatives for the following sentence: ' + question)
+        # see complete_update_function to figure out completion, based on args
+        pp('-------<answer>----')
+        pp(answer)
+        pp('-------<text>------')
+        pp(text)
+        pp('-------000000------')
+        pp(answer)
+        words = answer.split()
+        return ['asd', 'qwe']
+        if text:
+            return [i for i in words if i.startswith(text)]
+        else:
+            return words
+
     
     #
     # summarize_file
