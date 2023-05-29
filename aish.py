@@ -3,14 +3,19 @@ import cmd
 import readline
 import glob
 import os.path
+from pathlib import Path
 import ast
+import json
+import time
 import tempfile
 import unittest
-from pprint import pprint as pp
-
-
 import difflib
 from termcolor import colored
+from pprint import pprint as pp
+import openai
+
+debug = True
+#debug = False
 
 def display_diff(orig_string, updated_string):
     """
@@ -202,6 +207,102 @@ class Test2:
         self.assertEqual(class_, 'class Test2:\n    def __init__(self):\n        print("Hello2")\n    \n    def add(self, x, y):\n        return x + y')
 
 
+class GPT(object):
+
+    state_dir = Path.home() / ".ai"
+    curr_state = None
+
+    def __init__(self):
+        self.state_dir.mkdir(exist_ok=True)
+        self.curr_state = "state-{}".format(int(time.time()))
+        self.curr_state_file = self.state_dir / self.curr_state
+        if not self.curr_state_file.exists():
+            with open(self.curr_state_file, 'w') as f:
+                json.dump([], f)
+
+    def use_state(self, state_name):
+        self.curr_state = state_name
+
+    system_role_desc = 'You are a helpful assistant.'
+
+    def set_system_role(self, desc):
+        self.system_role_desc = desc
+
+    def get_system_role(self):
+        return self.system_role_desc
+
+    def list_states(self):
+        return [str(p.name) for p in self.state_dir.glob('*') if p.is_file()]
+
+    def load_state(self, state_name=None):
+        if state_name is None:
+            state_name = self.curr_state
+        state_file = self.state_dir / state_name
+        if state_file.exists():
+            with open(state_file, 'r') as f:
+                return json.load(f)
+        else:
+            return []
+
+    def save_state(self, save_name):
+        curr_file = self.state_dir / self.curr_state
+        save_file = self.state_dir / self.save_name
+        if save_file.exists():
+            raise Exception("State already exists")
+        print(f"Saving state to {save_file} from {curr_file}")
+        with open(save_file, 'w') as fw:
+            with open(curr_file, 'r') as fr:
+                fw.write(fr.read())
+
+    def update_state(self, state):
+        state_file = self.state_dir / self.curr_state
+        with open(state_file, 'w') as f:
+            json.dump(state, f)
+
+    def clear_state(self):
+        state_file = self.state_dir / curr_state
+        if state_file.exists():
+            os.remove(state_file)
+
+    def load_model(self):
+        model_file = Path.home() / ".aimodel"
+        if model_file.exists():
+            with open(model_file, 'r') as f:
+                return f.read().strip()
+        else:
+            return "gpt-3.5-turbo"
+
+    def ask(self, question):
+        global debug
+        state = self.load_state()
+        model = self.load_model()
+
+        messages = [{"role": "system", "content": self.system_role_desc}]
+        for h in state:
+            messages.append(h)
+        messages.append({"role": "user", "content": question})
+
+        while True:
+            try:
+                response = openai.ChatCompletion.create(
+                    model=model,
+                    messages=messages
+                )
+                break
+            except openai.error.RateLimitError:
+                print("Rate limit exceeded, retrying...")
+                time.sleep(5)
+
+        if debug:
+            print("Query: ", json.dumps(messages, indent=4))
+            print("Response: ", json.dumps(response, indent=4))
+
+        answer = response['choices'][0].message.content
+        state.append({"role": "user", "content": question})
+        state.append({"role": "assistant", "content": answer})
+        self.update_state(state)
+        return answer
+
 class InteractiveShell(cmd.Cmd):
     def __init__(self):
         super().__init__()
@@ -210,20 +311,29 @@ class InteractiveShell(cmd.Cmd):
         self.parser = argparse.ArgumentParser()
         subparsers = self.parser.add_subparsers()
 
+        # greet
         parser_greet = subparsers.add_parser("greet")
         parser_greet.add_argument("name", type=str)
         parser_greet.set_defaults(func=self.do_greet)
 
+        # sum
         parser_sum = subparsers.add_parser("sum")
         parser_sum.add_argument("x", type=int)
         parser_sum.add_argument("y", type=int)
         parser_sum.set_defaults(func=self.do_sum)
 
-        parser_update_file = subparsers.add_parser("update-file")
+        # summarize_file
+        parser_summarize_file = subparsers.add_parser("summarize_file")
+        parser_summarize_file.add_argument("filename", type=str)
+        parser_summarize_file.set_defaults(func=self.do_summarize_file)
+
+        # update-file
+        parser_update_file = subparsers.add_parser("update_file")
         parser_update_file.add_argument("filename", type=str)
         parser_update_file.set_defaults(func=self.do_update_file)
     
-        parser_update_function = subparsers.add_parser("update-function")
+        # update-function
+        parser_update_function = subparsers.add_parser("update_function")
         parser_update_function.add_argument("filename", type=str)
         parser_update_function.add_argument("function_name", type=str)
         parser_update_function.set_defaults(func=self.do_update_function)
@@ -231,10 +341,14 @@ class InteractiveShell(cmd.Cmd):
         self.completion_map = {
             "greet": ["Alice", "Bob", "Charlie"],
             "sum": [str(i) for i in range(10)],
-            "update-file": glob.glob('*'),
-            "update-function": glob.glob('*')
+            "summarize_file": glob.glob('*'),
+            "update_file": glob.glob('*'),
+            "update_function": glob.glob('*')
         }
 
+    #
+    # greet
+    #
     def do_greet(self, args):
         '''Outputs a greeting to the given name.'''
         if isinstance(args, str):
@@ -247,6 +361,9 @@ class InteractiveShell(cmd.Cmd):
         else:
             return self.completion_map["greet"]
 
+    #
+    # sum
+    #
     def do_sum(self, args):
         '''Outputs the sum of the two arguments.'''
         if isinstance(args, str):
@@ -258,11 +375,36 @@ class InteractiveShell(cmd.Cmd):
             return [i for i in self.completion_map["sum"] if i.startswith(text)]
         else:
             return self.completion_map["sum"]
+    
+    #
+    # summarize_file
+    #
+    def do_summarize_file(self, args):
+        '''Summarizes the contents of a file.'''
+        if isinstance(args, str):
+            args = self.parser.parse_args(f'summarize_file {args}'.split())
+        with open(args.filename) as f:
+            contents = f.read()
+        question = f"Summarize the file `{args.filename}`, file contents pasted below:\n\n{contents}"
+        answer = GPT().ask(question)
+        print(answer)
+    
+    def complete_summarize_file(self, text, line, begidx, endidx):
+        if text:
+            return [
+                f for f in glob.glob(text+'*') 
+                if os.path.isfile(f)
+            ]
+        else:
+            return glob.glob('*')
 
+    #
+    # update_file
+    #
     def do_update_file(self, args):
         '''Updates the modification time of a file to the current time.'''
         if isinstance(args, str):
-            args = self.parser.parse_args(f'update-file {args}'.split())
+            args = self.parser.parse_args(f'update_file {args}'.split())
         os.utime(args.filename, None)
         print(f"Updated file: {args.filename}")
 
@@ -279,12 +421,13 @@ class InteractiveShell(cmd.Cmd):
         self.last_command = line
         return super().parseline(line)
 
-    # Your existing do_ methods...
-
+    #
+    # update-function
+    #
     def do_update_function(self, arg):
         '''Prints the source of a function in a Python file.'''
         if isinstance(arg, str):
-            args = self.parser.parse_args(f'update-function {arg}'.split())
+            args = self.parser.parse_args(f'update_function {arg}'.split())
         else:
             args = arg
         with open(args.filename) as f:
@@ -293,8 +436,6 @@ class InteractiveShell(cmd.Cmd):
         for function in functions:
             if function.name == args.function_name:
                 print(f"Found function {args.function_name} in file {args.filename}")
-
-    # Your existing complete_ methods...
 
     def complete_update_function(self, text, line, begidx, endidx):
         args = line.split()
@@ -334,6 +475,7 @@ class Test_InteractiveShell(unittest.TestCase):
         child.sendline('greet Alice')
         child.expect('Hello, Alice!')
         child.sendline('quit')
+
 
 
 if __name__ == '__main__':
