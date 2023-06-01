@@ -1,3 +1,4 @@
+import sys
 import argparse
 import cmd
 import readline
@@ -13,9 +14,22 @@ import difflib
 from termcolor import colored
 from pprint import pprint as pp
 import openai
+from pygments import highlight
+from pygments.lexers import PythonLexer, GoLexer, CLexer, CppLexer, RustLexer, BashLexer
+from pygments.formatters import TerminalFormatter
+import logging
 
-debug = True
-#debug = False
+
+debug_mode = True
+#debug_mode = False
+
+logging.basicConfig(level=logging.DEBUG)
+def debug(*args):
+    if debug_mode:
+        msg = ' '.join([str(type(arg)) for arg in args])
+        logging.debug(msg)
+
+
 
 def display_diff(orig_string, updated_string):
     """
@@ -207,6 +221,218 @@ class Test2:
         self.assertEqual(class_, 'class Test2:\n    def __init__(self):\n        print("Hello2")\n    \n    def add(self, x, y):\n        return x + y')
 
 
+class GPTAnswer(object):
+
+    def __init__(self, question, answer, state):
+        self.question = question
+        self.answer = answer
+        self.state = state
+        self._init_highlight()
+        self._highlighted_answer = None
+        self._current_language = None
+
+    def __repr__(self):
+        return f"Q: {self.question}\nA: {self.answer}\nS: {self.state}"
+    
+    def __str__(self):
+        return self.answer
+
+    def _init_highlight(self):
+        self._formatter = TerminalFormatter()
+        self._inside_code_block = False
+        self._language_lexer_map = {
+            "python": PythonLexer(),
+            "golang": GoLexer(),
+            "c": CLexer(),
+            "cpp": CppLexer(),
+            "c++": CppLexer(),
+            "bash": BashLexer(),
+            "terminal": BashLexer(),
+        }
+    
+    def _highlight(self, s, language):
+        lexer = self._language_lexer_map.get(language, None)
+        if lexer:
+            return highlight(s, lexer, self._formatter)
+        return s
+    
+    def get_most_likely_language(self, lines, idx):
+        """ return a tuple of (language, is_code_block_delimiter)
+            * the most likely language for the code block starting at idx,
+              or None if idx does not start a code block.
+            * boolean denoting if line is a code block delimiter or not
+            Judge either by name following ``` or by most frequently occurring
+            language in the previous 3 lines.
+        """
+        if not lines[idx].startswith('```'):
+            return (self._current_language, False)
+        
+        if self._inside_code_block:
+            self._inside_code_block = False
+            self._current_language = None
+            return (self._current_language, True)
+
+        self._inside_code_block = True
+
+        if lines[idx].startswith('```python'):
+            self._current_language = 'python'
+        elif lines[idx].startswith('```go'):
+            self._current_language = 'golang'
+        elif lines[idx].startswith('```c'):
+            self._current_language = 'c'
+        elif lines[idx].startswith('```cpp'): 
+            self._current_language = 'cpp'
+        elif lines[idx].startswith('```c++'):
+            self._current_language = 'c++'
+        elif lines[idx].startswith('```rust'):
+            self._current_language = 'rust'
+        elif lines[idx].startswith('```bash'):
+            self._current_language = 'bash'
+        elif lines[idx].startswith('```terminal'):
+            self._current_language = 'terminal'
+        else:
+            # find most frequently occurring language in the previous 3 lines
+            counter = {
+                "python": 0,
+                "golang": 0,
+                " c ": 0,
+                "cpp": 0,
+                "c++": 0,
+                "rust": 0,
+                "bash": 0,
+                "terminal": 0
+            }
+            for i in range(idx-3, idx):
+                for language in counter:
+                    counter[language] += len(lines[i].split(language)) - 1
+            self._current_language = max(counter, key=counter.get)
+        return (self._current_language, True)
+    
+    def get_code_blocks(self):
+        ''' return a list of (language, code_block) tuples, where language is the
+            language of the code block, and code_block is the joined lines of the
+            code block. If language is None, the code block is plain text.
+        '''
+        lines = self.answer.splitlines()
+        language_tagged_lines = []
+        for idx, line in enumerate(lines):
+            (language, is_code_block_delimiter) = self.get_most_likely_language(lines, idx)
+            if not is_code_block_delimiter:
+                language_tagged_lines.append((language, line))
+        # now we have a list of (language, line) tuples
+        # we want to split this into a list of (language, code_block) tuples
+        # where code_block the joined lines of the code block
+
+        code_blocks = []
+        current_language = None # None means no code language, thus plain text
+        current_block = []
+        for language, line in language_tagged_lines:
+            if language == current_language:
+                current_block.append(line)
+            else:
+                stripped_block = '\n'.join(current_block).strip()
+                if stripped_block:
+                    code_blocks.append((current_language, stripped_block))
+                current_language = language
+                current_block = [line]
+        stripped_block = '\n'.join(current_block).strip()
+        if stripped_block:
+            code_blocks.append((current_language, stripped_block))
+        return code_blocks
+    
+    def highlight(self):
+        ''' return the GPT answer, with syntax highlighting for code blocks
+        '''
+        if self._highlighted_answer is not None:
+            return self._highlighted_answer
+        lines = self.answer.splitlines()
+        highlighted_lines = []
+        for idx, line in enumerate(lines):
+            language = self.get_most_likely_language(lines, idx)
+            if language:
+                highlighted_lines.append(str(language) + ' ' + self._highlight(line, language))
+            else:
+                highlighted_lines.append(str(language) + ' ' + line)
+        self._highlighted_answer = '\n'.join(highlighted_lines)
+        return self._highlighted_answer
+
+
+# highlight testing
+if 0:
+    answer1 = '''
+Hey look at this dope python code I wrote:
+```python
+def test1():
+    print("Hello1")
+```
+nice huh? here we to some terminal stuff and in the terminal we invoke a python script
+since we love
+look here
+```
+$ find . -name '*.py' | xargs grep 'def' | ./aish.py update_function aish.py test1
+```
+    '''
+    def test_highlight():
+        answer = GPTAnswer("", answer1, {})
+        # assert that the first code block is python
+        print(answer.highlight())
+
+    def test_get_code_blocks():
+        answer = GPTAnswer("", answer1, {})
+        pp(answer.get_code_blocks())
+
+    #test_highlight()
+    test_get_code_blocks()
+    sys.exit()
+
+
+class Test_GPTAnswer(unittest.TestCase):
+    answer1 = '''
+Hey look at this dope python code I wrote:
+```python
+def test1():
+    print("Hello1")
+```
+nice huh?
+```'''
+
+    answer2 = '''
+Hey look at this dope python code I wrote:
+```python
+def test1():
+    print("Hello1")
+```
+nice huh? here we to some terminal stuff and in the terminal we invoke a python script
+since we love
+look here
+```
+$ find . -name '*.py' | xargs grep 'def' | ./aish.py update_function aish.py test1
+```
+    '''
+    def test_get_code_blocks(self):
+        answer = GPTAnswer("", self.answer1, {})
+        code_blocks = answer.get_code_blocks()
+        self.assertEqual(len(code_blocks), 3)
+        self.assertEqual(code_blocks[0][0], None)
+        self.assertEqual(code_blocks[1][0], "python")
+        self.assertEqual(code_blocks[2][0], None)
+        self.assertEqual(code_blocks[0][1], 'Hey look at this dope python code I wrote:')
+        self.assertEqual(code_blocks[1][1], 'def test1():\n    print("Hello1")')
+        self.assertEqual(code_blocks[2][1], 'nice huh?')
+
+    def test_get_code_blocks2(self):
+        answer = GPTAnswer("", self.answer2, {})
+        code_blocks = answer.get_code_blocks()
+        self.assertEqual(len(code_blocks), 4)
+        self.assertEqual(code_blocks[0][0], None)
+        self.assertEqual(code_blocks[1][0], 'python')
+        self.assertEqual(code_blocks[2][0], None)
+        self.assertEqual(code_blocks[3][0], 'terminal')
+        self.assertEqual(code_blocks[0][1], 'Hey look at this dope python code I wrote:')
+        self.assertEqual(code_blocks[1][1], 'def test1():\n    print("Hello1")')
+        self.assertEqual(code_blocks[2][1], 'nice huh? here we to some terminal stuff and in the terminal we invoke a python script\nsince we love\nlook here')
+        self.assertEqual(code_blocks[3][1], '$ find . -name \'*.py\' | xargs grep \'def\' | ./aish.py update_function aish.py test1')
+
 class GPT(object):
 
     state_dir = Path.home() / ".ai"
@@ -260,7 +486,7 @@ class GPT(object):
             json.dump(state, f)
 
     def clear_state(self):
-        state_file = self.state_dir / curr_state
+        state_file = self.state_dir / self.curr_state
         if state_file.exists():
             os.remove(state_file)
 
@@ -273,7 +499,7 @@ class GPT(object):
             return "gpt-3.5-turbo"
 
     def ask(self, question):
-        global debug
+        global debug_mode
         state = self.load_state()
         model = self.load_model()
 
@@ -293,7 +519,7 @@ class GPT(object):
                 print("Rate limit exceeded, retrying...")
                 time.sleep(5)
 
-        if debug:
+        if debug_mode:
             print("Query: ", json.dumps(messages, indent=4))
             print("Response: ", json.dumps(response, indent=4))
 
@@ -301,7 +527,8 @@ class GPT(object):
         state.append({"role": "user", "content": question})
         state.append({"role": "assistant", "content": answer})
         self.update_state(state)
-        return answer
+        return GPTAnswer(question, answer, state)
+
 
 class InteractiveShell(cmd.Cmd):
     def __init__(self):
@@ -311,22 +538,11 @@ class InteractiveShell(cmd.Cmd):
         self.parser = argparse.ArgumentParser()
         subparsers = self.parser.add_subparsers()
 
-        # greet
-        parser_greet = subparsers.add_parser("greet")
-        parser_greet.add_argument("name", type=str)
-        parser_greet.set_defaults(func=self.do_greet)
-
-        # sum
-        parser_sum = subparsers.add_parser("sum")
-        parser_sum.add_argument("x", type=int)
-        parser_sum.add_argument("y", type=int)
-        parser_sum.set_defaults(func=self.do_sum)
-
         # ask
         parser_ask = subparsers.add_parser("ask")
-        # accept arbitrary length of arguments
         parser_ask.add_argument("question", nargs=argparse.REMAINDER)
         parser_ask.set_defaults(func=self.do_ask)
+
 
         # summarize_file
         parser_summarize_file = subparsers.add_parser("summarize_file")
@@ -336,6 +552,7 @@ class InteractiveShell(cmd.Cmd):
         # update-file
         parser_update_file = subparsers.add_parser("update_file")
         parser_update_file.add_argument("filename", type=str)
+        parser_update_file.add_argument("instruction", nargs=argparse.REMAINDER)
         parser_update_file.set_defaults(func=self.do_update_file)
     
         # update-function
@@ -344,45 +561,20 @@ class InteractiveShell(cmd.Cmd):
         parser_update_function.add_argument("function_name", type=str)
         parser_update_function.set_defaults(func=self.do_update_function)
 
+        # run
+        parser_run = subparsers.add_parser("run")
+        parser_run.add_argument("executable", type=str)
+        parser_run.add_argument("arguments", nargs=argparse.REMAINDER)
+        parser_run.set_defaults(func=self.do_run)
+
         self.completion_map = {
-            "greet": ["Alice", "Bob", "Charlie"],
-            "sum": [str(i) for i in range(10)],
             "ask": ["What", "When", "Where", "Why", "How"],
+            "run": glob.glob('*'),
             "summarize_file": glob.glob('*'),
             "update_file": glob.glob('*'),
             "update_function": glob.glob('*')
         }
 
-    #
-    # greet
-    #
-    def do_greet(self, args):
-        '''Outputs a greeting to the given name.'''
-        if isinstance(args, str):
-            args = self.parser.parse_args(f'greet {args}'.split())
-        print(f"Hello, {args.name}!")
-
-    def complete_greet(self, text, line, begidx, endidx):
-        if text:
-            return [i for i in self.completion_map["greet"] if i.startswith(text)]
-        else:
-            return self.completion_map["greet"]
-
-    #
-    # sum
-    #
-    def do_sum(self, args):
-        '''Outputs the sum of the two arguments.'''
-        if isinstance(args, str):
-            args = self.parser.parse_args(f'sum {args}'.split())
-        print(args.x + args.y)
-
-    def complete_sum(self, text, line, begidx, endidx):
-        if text:
-            return [i for i in self.completion_map["sum"] if i.startswith(text)]
-        else:
-            return self.completion_map["sum"]
-    
     #
     # ask
     #
@@ -396,10 +588,14 @@ class InteractiveShell(cmd.Cmd):
     
     def complete_ask(self, text, line, begidx, endidx):
         '''Suggest three alternative words for the next word of the command, fetched from GPT().ask(command)'''
-        if not text:
-            return self.completion_map["ask"]
-        question = ' '.join(args.question)
-        answer = GPT().ask('Suggest six completion alternatives for the following sentence: ' + question)
+        if line.strip() == 'ask' or len(line.split()) == 2:
+            comp_list = [i for i in self.completion_map["ask"] if i.startswith(text)] 
+            if comp_list:
+                return comp_list
+        return []
+        #question = ' '.join(args.question)
+        pp('-------<asking>-------')
+        #answer = GPT().ask('Suggest six completion alternatives for the following sentence: ' + question)
         # see complete_update_function to figure out completion, based on args
         pp('-------<answer>----')
         pp(answer)
@@ -444,8 +640,13 @@ class InteractiveShell(cmd.Cmd):
         '''Updates the modification time of a file to the current time.'''
         if isinstance(args, str):
             args = self.parser.parse_args(f'update_file {args}'.split())
-        os.utime(args.filename, None)
-        print(f"Updated file: {args.filename}")
+        with open(args.filename) as f:
+            contents = f.read()
+        question = f"The file `{args.filename}`, file contents pasted below double line breaks at end of message,"
+        question = f" according to the following instructions: `{args.instruction}`"
+        question += f"\n\n{contents}" 
+        answer = GPT().ask(question)
+        print(answer)
 
     def complete_update_file(self, text, line, begidx, endidx):
         if text:
@@ -489,31 +690,59 @@ class InteractiveShell(cmd.Cmd):
                 f for f in glob.glob(text+'*')
                 if os.path.isfile(f)
             ]
+    #
+    # run
+    #
+    def do_run(self, arg):
+        '''Runs a Python file.'''
+        if isinstance(arg, str):
+            args = self.parser.parse_args(f'run {arg}'.split())
+        else:
+            args = arg
+        # execute using subprocess
+        p = subprocess.run([args.executable] + args.arguments, stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
+        print(p.stdout.decode('utf-8'))
+    
+    def complete_run(self, text, line, begidx, endidx):
+        args = line.split()
+        if text:
+            if len(args) >= 2:
+                return [
+                    f for f in glob.glob(text+'*') 
+                    if os.path.isfile(f)
+                ]
+            else:
+                return [
+                    f for f in glob.glob(text+'*') 
+                ]
+        else:
+            return glob.glob('*')
 
 
 import subprocess
 import pexpect
 
-class Test_InteractiveShell(unittest.TestCase):
-    def test_sum_command_line(self):
-        output = subprocess.check_output(["python3", "aish.py", "sum", "1", "2"])
-        self.assertEqual(output.strip(), b'3')
+if 0: 
+    class Test_InteractiveShell(unittest.TestCase):
+        def test_sum_command_line(self):
+            output = subprocess.check_output(["python3", "aish.py", "sum", "1", "2"])
+            self.assertEqual(output.strip(), b'3')
 
-    def test_greet_command_line(self):
-        output = subprocess.check_output(["python3", "aish.py", "greet", "Alice"])
-        self.assertEqual(output.strip(), b'Hello, Alice!')
+        def test_greet_command_line(self):
+            output = subprocess.check_output(["python3", "aish.py", "greet", "Alice"])
+            self.assertEqual(output.strip(), b'Hello, Alice!')
 
-    def test_sum_interactive_shell(self):
-        child = pexpect.spawn('python3 aish.py')
-        child.sendline('sum 1 2')
-        child.expect('3')
-        child.sendline('quit')
+        def test_sum_interactive_shell(self):
+            child = pexpect.spawn('python3 aish.py')
+            child.sendline('sum 1 2')
+            child.expect('3')
+            child.sendline('quit')
 
-    def test_greet_interactive_shell(self):
-        child = pexpect.spawn('python3 aish.py')
-        child.sendline('greet Alice')
-        child.expect('Hello, Alice!')
-        child.sendline('quit')
+        def test_greet_interactive_shell(self):
+            child = pexpect.spawn('python3 aish.py')
+            child.sendline('greet Alice')
+            child.expect('Hello, Alice!')
+            child.sendline('quit')
 
 
 
@@ -531,4 +760,3 @@ if __name__ == '__main__':
     else:
         # Interactive mode
         InteractiveShell().cmdloop()
-
