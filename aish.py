@@ -18,6 +18,8 @@ from pygments import highlight
 from pygments.lexers import PythonLexer, GoLexer, CLexer, CppLexer, RustLexer, BashLexer
 from pygments.formatters import TerminalFormatter
 import logging
+import traceback
+import pdb
 
 
 debug_mode = True
@@ -63,83 +65,60 @@ def display_diff(orig_string, updated_string):
 
 class PyMod(object):
 
-    def __init__(self, filename):
-        self.filename = filename
+    def __init__(self, file_path):
+        self.file_path = file_path
+    
+    def get_source_of_function(self, func_name):
+        ''' returns source code of func_name in file_path'''
+        with open(self.file_path, 'r') as file:
+            source = file.read()
+        module = ast.parse(source)
+        for node in module.body:
+            if isinstance(node, ast.FunctionDef) and node.name == func_name:
+                func_source = source.split('\n')[node.lineno - 1 : node.end_lineno]
+                return '\n'.join(func_source) + '\n'
+        raise ValueError(f"No function '{func_name}' found in {self.file_path}")
+    
+    def replace_function(self, func_name, new_func_source):
+        with open(self.file_path, 'r') as file:
+            source_lines = file.readlines()
+        module = ast.parse(''.join(source_lines))
+        for node in module.body:
+            if isinstance(node, ast.FunctionDef) and node.name == func_name:
+                start_lineno = node.lineno
+                end_lineno = node.end_lineno
+                break
+        else:
+            raise ValueError(f"No function '{func_name}' found in {self.file_path}")
+        new_source_lines = source_lines[:start_lineno - 1] + [new_func_source] + source_lines[end_lineno:]
+        with open(self.file_path, 'w') as file:
+            file.write(''.join(new_source_lines))
+    
+    def get_source_of_class(self, class_name):
+        ''' returns source code of class_name in file_path'''
+        with open(self.file_path, 'r') as file:
+            source = file.read()
+        module = ast.parse(source)
+        for node in module.body:
+            if isinstance(node, ast.ClassDef) and node.name == class_name:
+                class_source = source.split('\n')[node.lineno - 1 : node.end_lineno]
+                return '\n'.join(class_source) + '\n'
+        raise ValueError(f"No class '{class_name}' found in {self.file_path}")
 
-    def extract_function(self, func_name):
-        '''Extracts the source code of a function from a python file.
-        Known bug: functions ending at the end of the file missing \\n\\n
-        will not be found
-        '''
-        # extract source code of function from filename
-        # find the function definition
-        with open(self.filename, 'r') as f:
-            content = f.read()
-        assert len(content) > 0
-        func_def = 'def {}'.format(func_name)
-        func_start = content.find(func_def)
-        if func_start == -1:
-            raise Exception(content)
-            raise Exception(f"Could not find function definition for {func_name}")
-        # find the end of the function
-        func_end = content.find('\n\n', func_start)
-        if func_end == -1:
-            raise Exception(f"Could not find end of function definition for {func_name}")
-        # extract the function
-        func = content[func_start:func_end]
-        return func, func_start, func_end
-
-    def replace_function(self, func_name, new_func):
-        func, func_start, func_end = self.extract_function(func_name)
-        self._replace_function(func_name, func, func_start, func_end, new_func)
-    
-    def _replace_function(self, func_name, func, func_start, func_end, new_func):
-        with open(self.filename, 'r') as f:
-            content = f.read()
-        if not content.index(func) == func_start:
-            raise Exception("Function definition does not match expected location")
-        # replace func with new_func
-        content = content[:func_start] + new_func + content[func_end:]
-        with open(self.filename, 'w') as f:
-            f.write(content)
-            f.flush()
-    
-    def extract_class(self, class_name):
-        '''Extracts the source code of a class from a python file.
-        Known bug: classes ending at the end of the file missing \\n\\n
-        will not be found
-        '''
-        # extract source code of class from filename
-        # find the class definition
-        with open(self.filename, 'r') as f:
-            content = f.read()
-        assert len(content) > 0
-        class_def = 'class {}'.format(class_name)
-        class_start = content.find(class_def)
-        if class_start == -1:
-            raise Exception(f"Could not find class definition for {class_name}")
-        # find the end of the class
-        class_end = content.find('\n\n', class_start)
-        if class_end == -1:
-            raise Exception(f"Could not find end of class definition for {class_name}")
-        # extract the class
-        class_ = content[class_start:class_end]
-        return class_, class_start, class_end
-    
-    def replace_class(self, class_name, new_class):
-        class_, class_start, class_end = self.extract_class(class_name)
-        self._replace_class(class_name, class_, class_start, class_end, new_class)
-    
-    def _replace_class(self, class_name, class_, class_start, class_end, new_class):
-        with open(self.filename, 'r') as f:
-            content = f.read()
-        if not content.index(class_) == class_start:
-            raise Exception("Class definition does not match expected location")
-        # replace class with new_class
-        content = content[:class_start] + new_class + content[class_end:]
-        with open(self.filename, 'w') as f:
-            f.write(content)
-            f.flush()
+    def replace_class(self, class_name, new_class_source):
+        with open(self.file_path, 'r') as file:
+            source_lines = file.readlines()
+        module = ast.parse(''.join(source_lines))
+        for node in module.body:
+            if isinstance(node, ast.ClassDef) and node.name == class_name:
+                start_lineno = node.lineno
+                end_lineno = node.end_lineno
+                break
+        else:
+            raise ValueError(f"No class '{class_name}' found in {self.file_path}")
+        new_source_lines = source_lines[:start_lineno - 1] + [new_class_source] + source_lines[end_lineno:]
+        with open(self.file_path, 'w') as file:
+            file.write(''.join(new_source_lines))
 
 
 class Test_PyMod(unittest.TestCase):
@@ -168,6 +147,21 @@ class Test2:
         return x + y
 
 '''
+    odd_class = b'''
+asd=123
+class OddClass:
+ def yay(self): pass
+
+ def yo(self):
+  pass
+
+
+ def wayno(self):
+  pass
+
+foo='bar'
+'''
+
     def setUp(self):
         # create a temporary python file containing three functions
         # three_functions 
@@ -178,61 +172,73 @@ class Test2:
         self.two_classes_file = tempfile.NamedTemporaryFile(suffix='.py')
         self.two_classes_file.write(self.two_classes)
         self.two_classes_file.flush()
+        # odd_class
+        self.odd_class_file = tempfile.NamedTemporaryFile(suffix='.py')
+        self.odd_class_file.write(self.odd_class)
+        self.odd_class_file.flush()
+
     
     def tearDown(self):
         # delete the temporary python file
         self.three_functions_file.close()
 
-    def test_extract_function(self):
+    def test_get_source_of_function(self):
         mod = PyMod(self.three_functions_file.name)
         # 1
-        func, func_start, func_end = mod.extract_function('test1')
-        self.assertEqual(func, 'def test1():\n    print("Hello1")')
+        func_source = mod.get_source_of_function('test1')
+        self.assertEqual(func_source, 'def test1():\n    print("Hello1")\n')
         # 2
-        func, func_start, func_end = mod.extract_function('test2')
-        self.assertEqual(func, 'def test2():\n    print("Hello2")')
+        func_source = mod.get_source_of_function('test2')
+        self.assertEqual(func_source, 'def test2():\n    print("Hello2")\n')
         # 3
-        func, func_start, func_end = mod.extract_function('test3')
-        self.assertEqual(func, 'def test3():\n    print("Hello3")')
-    
+        func_source = mod.get_source_of_function('test3')
+        self.assertEqual(func_source, 'def test3():\n    print("Hello3")\n')
+
     def test_replace_function(self):
         mod = PyMod(self.three_functions_file.name)
-        mod.replace_function('test2', 'def test2():\n    print("Goodbye2")')
         # 1
         mod.replace_function('test1', 'def test1():\n    print("Goodbye1")')
-        func, func_start, func_end = mod.extract_function('test1')
-        self.assertEqual(func, 'def test1():\n    print("Goodbye1")')
+        func_source = mod.get_source_of_function('test1')
+        self.assertEqual(func_source, 'def test1():\n    print("Goodbye1")\n')
         # 2
         mod.replace_function('test2', 'def test2():\n    print("Goodbye2")')
-        func, func_start, func_end = mod.extract_function('test2')
-        self.assertEqual(func, 'def test2():\n    print("Goodbye2")')
+        func_source = mod.get_source_of_function('test2')
+        self.assertEqual(func_source, 'def test2():\n    print("Goodbye2")\n')
         # 3
         mod.replace_function('test3', 'def test3():\n    print("Goodbye3")')
-        func, func_start, func_end = mod.extract_function('test3')
-        self.assertEqual(func, 'def test3():\n    print("Goodbye3")')
+        func_source = mod.get_source_of_function('test3')
+        self.assertEqual(func_source, 'def test3():\n    print("Goodbye3")\n')
 
-    def test_extract_class(self):
+    def test_get_source_of_class(self):
         mod = PyMod(self.two_classes_file.name)
         # 1
-        class_, class_start, class_end = mod.extract_class('Test1')
-        self.assertEqual(class_, 'class Test1:\n    def __init__(self):\n        print("Hello1")')
-        # 2
-        class_, class_start, class_end = mod.extract_class('Test2')
-        self.assertEqual(class_, 'class Test2:\n    def __init__(self):\n        print("Hello2")\n    \n    def add(self, x, y):\n        return x + y')
+        class_source = mod.get_source_of_class('Test1')
+        self.assertEqual(class_source, 'class Test1:\n    def __init__(self):\n        print("Hello1")\n')
+        class_source = mod.get_source_of_class('Test2')
+        self.assertEqual(class_source, 'class Test2:\n    def __init__(self):\n        print("Hello2")\n    \n    def add(self, x, y):\n        return x + y\n')
+    
+    def test_replace_class(self):
+        mod = PyMod(self.two_classes_file.name)
+        # 1
+        mod.replace_class('Test1', 'class Test1:\n    def __init__(self):\n        print("Goodbye1")')
+        class_source = mod.get_source_of_class('Test1')
+        self.assertEqual(class_source, 'class Test1:\n    def __init__(self):\n        print("Goodbye1")\n')
 
 
 class GPTAnswer(object):
 
-    def __init__(self, question, answer, state):
+    def __init__(self, question, answer, state, state_name, default_language=None):
         self.question = question
         self.answer = answer
         self.state = state
+        self.state_name = state_name
+        self.default_language = default_language
         self._init_highlight()
         self._highlighted_answer = None
         self._current_language = None
 
     def __repr__(self):
-        return f"Q: {self.question}\nA: {self.answer}\nS: {self.state}"
+        return f"Q: {self.question}\nA: {self.answer}\nSn: {self.state_name}\nS: {self.state}"
     
     def __str__(self):
         return self.answer
@@ -295,7 +301,7 @@ class GPTAnswer(object):
             counter = {
                 "python": 0,
                 "golang": 0,
-                " c ": 0,
+                ".c": 0,
                 "cpp": 0,
                 "c++": 0,
                 "rust": 0,
@@ -305,7 +311,14 @@ class GPTAnswer(object):
             for i in range(idx-3, idx):
                 for language in counter:
                     counter[language] += len(lines[i].split(language)) - 1
-            self._current_language = max(counter, key=counter.get)
+            if sum(counter.values()) == 0:
+                # no language found, use default
+                self._current_language = self.default_language
+            else:
+                self._current_language = max(counter, key=counter.get)
+            # fix ".c" quirk
+            if self._current_language == '.c':
+                self._current_language = 'c'
         return (self._current_language, True)
     
     def get_code_blocks(self):
@@ -348,12 +361,12 @@ class GPTAnswer(object):
         lines = self.answer.splitlines()
         highlighted_lines = []
         for idx, line in enumerate(lines):
-            language = self.get_most_likely_language(lines, idx)
-            if language:
-                highlighted_lines.append(str(language) + ' ' + self._highlight(line, language))
+            language, code_block_delimiter = self.get_most_likely_language(lines, idx)
+            if language and not code_block_delimiter:
+                highlighted_lines.append(self._highlight(line, language))
             else:
-                highlighted_lines.append(str(language) + ' ' + line)
-        self._highlighted_answer = '\n'.join(highlighted_lines)
+                highlighted_lines.append(line + '\n')
+        self._highlighted_answer = ''.join(highlighted_lines)
         return self._highlighted_answer
 
 
@@ -373,12 +386,12 @@ $ find . -name '*.py' | xargs grep 'def' | ./aish.py update_function aish.py tes
 ```
     '''
     def test_highlight():
-        answer = GPTAnswer("", answer1, {})
+        answer = GPTAnswer("", answer1, {}, None)
         # assert that the first code block is python
         print(answer.highlight())
 
     def test_get_code_blocks():
-        answer = GPTAnswer("", answer1, {})
+        answer = GPTAnswer("", answer1, {}, None)
         pp(answer.get_code_blocks())
 
     #test_highlight()
@@ -407,10 +420,51 @@ since we love
 look here
 ```
 $ find . -name '*.py' | xargs grep 'def' | ./aish.py update_function aish.py test1
+``` '''
+
+    answer3 = '''
+Here's an example implementation that fulfills the instructions you provided:
+
 ```
-    '''
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
+void create_temp_file() {
+  char filename[] = "temp.txt";
+  int fd = open(filename, O_WRONLY|O_CREAT|O_TRUNC, 0666);
+  if (fd == -1) {
+    perror("open");
+    exit(1);
+  }
+
+  pid_t pid = getpid();
+  uid_t uid = getuid();
+  gid_t gid = getgid();
+
+  // Write current pid, user, and other useful data to file
+  dprintf(fd, "PID: %d\n", pid);
+  dprintf(fd, "UID: %d\n", uid);
+  dprintf(fd, "GID: %d\n", gid);
+
+  close(fd);
+}
+
+int main() {
+  printf("Hello, world!\n");
+  create_temp_file();
+  return 0;
+}
+```
+
+This implementation creates a new temporary file in the current directory, writes the current process ID, user ID, and group ID to the file, and then closes it. You can modify the filename and file permissions as needed.
+'''
+
     def test_get_code_blocks(self):
-        answer = GPTAnswer("", self.answer1, {})
+        answer = GPTAnswer("", self.answer1, {}, None, default_language="brainfuck")
         code_blocks = answer.get_code_blocks()
         self.assertEqual(len(code_blocks), 3)
         self.assertEqual(code_blocks[0][0], None)
@@ -421,7 +475,7 @@ $ find . -name '*.py' | xargs grep 'def' | ./aish.py update_function aish.py tes
         self.assertEqual(code_blocks[2][1], 'nice huh?')
 
     def test_get_code_blocks2(self):
-        answer = GPTAnswer("", self.answer2, {})
+        answer = GPTAnswer("", self.answer2, {}, None, default_language="malbolge")
         code_blocks = answer.get_code_blocks()
         self.assertEqual(len(code_blocks), 4)
         self.assertEqual(code_blocks[0][0], None)
@@ -432,22 +486,31 @@ $ find . -name '*.py' | xargs grep 'def' | ./aish.py update_function aish.py tes
         self.assertEqual(code_blocks[1][1], 'def test1():\n    print("Hello1")')
         self.assertEqual(code_blocks[2][1], 'nice huh? here we to some terminal stuff and in the terminal we invoke a python script\nsince we love\nlook here')
         self.assertEqual(code_blocks[3][1], '$ find . -name \'*.py\' | xargs grep \'def\' | ./aish.py update_function aish.py test1')
+    
+    def test_get_code_blocks3(self):
+        answer = GPTAnswer("", self.answer3, {}, None, default_language="c")
+        code_blocks = answer.get_code_blocks()
+        self.assertEqual(len(code_blocks), 3)
+        self.assertEqual(code_blocks[0][0], None)
+        self.assertEqual(code_blocks[1][0], "c")
+        self.assertEqual(code_blocks[2][0], None)
+
 
 class GPT(object):
 
     state_dir = Path.home() / ".ai"
-    curr_state = None
+    state_name = None
 
-    def __init__(self):
+    def __init__(self, state_name=None):
         self.state_dir.mkdir(exist_ok=True)
-        self.curr_state = "state-{}".format(int(time.time()))
-        self.curr_state_file = self.state_dir / self.curr_state
-        if not self.curr_state_file.exists():
-            with open(self.curr_state_file, 'w') as f:
+        self.state_name = state_name or "state-{}".format(int(time.time()))
+        self.state_path = self.state_dir / self.state_name
+        if not self.state_path.exists():
+            with open(self.state_path, 'w') as f:
                 json.dump([], f)
 
     def use_state(self, state_name):
-        self.curr_state = state_name
+        self.state_name = state_name
 
     system_role_desc = 'You are a helpful assistant.'
 
@@ -462,7 +525,7 @@ class GPT(object):
 
     def load_state(self, state_name=None):
         if state_name is None:
-            state_name = self.curr_state
+            state_name = self.state_name
         state_file = self.state_dir / state_name
         if state_file.exists():
             with open(state_file, 'r') as f:
@@ -470,23 +533,13 @@ class GPT(object):
         else:
             return []
 
-    def save_state(self, save_name):
-        curr_file = self.state_dir / self.curr_state
-        save_file = self.state_dir / self.save_name
-        if save_file.exists():
-            raise Exception("State already exists")
-        print(f"Saving state to {save_file} from {curr_file}")
-        with open(save_file, 'w') as fw:
-            with open(curr_file, 'r') as fr:
-                fw.write(fr.read())
-
     def update_state(self, state):
-        state_file = self.state_dir / self.curr_state
+        state_file = self.state_dir / self.state_name
         with open(state_file, 'w') as f:
             json.dump(state, f)
 
     def clear_state(self):
-        state_file = self.state_dir / self.curr_state
+        state_file = self.state_dir / self.state_name
         if state_file.exists():
             os.remove(state_file)
 
@@ -498,7 +551,7 @@ class GPT(object):
         else:
             return "gpt-3.5-turbo"
 
-    def ask(self, question):
+    def ask(self, question, default_language=None):
         global debug_mode
         state = self.load_state()
         model = self.load_model()
@@ -527,7 +580,7 @@ class GPT(object):
         state.append({"role": "user", "content": question})
         state.append({"role": "assistant", "content": answer})
         self.update_state(state)
-        return GPTAnswer(question, answer, state)
+        return GPTAnswer(question, answer, state, self.state_name, default_language=default_language)
 
 
 class InteractiveShell(cmd.Cmd):
@@ -549,17 +602,25 @@ class InteractiveShell(cmd.Cmd):
         parser_summarize_file.add_argument("filename", type=str)
         parser_summarize_file.set_defaults(func=self.do_summarize_file)
 
-        # update-file
+        # update_file
         parser_update_file = subparsers.add_parser("update_file")
         parser_update_file.add_argument("filename", type=str)
         parser_update_file.add_argument("instruction", nargs=argparse.REMAINDER)
         parser_update_file.set_defaults(func=self.do_update_file)
     
-        # update-function
+        # update_function
         parser_update_function = subparsers.add_parser("update_function")
         parser_update_function.add_argument("filename", type=str)
         parser_update_function.add_argument("function_name", type=str)
+        parser_update_function.add_argument("instruction", nargs=argparse.REMAINDER)
         parser_update_function.set_defaults(func=self.do_update_function)
+
+        # update_class
+        parser_update_class = subparsers.add_parser("update_class")
+        parser_update_class.add_argument("filename", type=str)
+        parser_update_class.add_argument("class_name", type=str)
+        parser_update_class.add_argument("instruction", nargs=argparse.REMAINDER)
+        parser_update_class.set_defaults(func=self.do_update_class)
 
         # run
         parser_run = subparsers.add_parser("run")
@@ -632,6 +693,38 @@ class InteractiveShell(cmd.Cmd):
             ]
         else:
             return glob.glob('*')
+    
+    def _get_file_language(self, filename):
+        ''' return the language of the file, based on the file extension
+        '''
+        if filename.endswith('.py'):
+            return 'python'
+        elif filename.endswith('.go'):
+            return 'golang'
+        elif filename.endswith('.c'):
+            return 'c'
+        elif filename.endswith('.cpp'):
+            return 'cpp'
+        elif filename.endswith('.rs'):
+            return 'rust'
+        elif filename.endswith('.sh'):
+            return 'bash'
+        else:
+            return None 
+    
+    def get_language_specific_code_block(self, answer, language):
+        code_blocks = answer.get_code_blocks()
+        matching_block = None
+        count = 0
+        for lang, code_block in code_blocks:
+            if lang == language:
+                matching_block = code_block
+                count += 1
+        if count > 1:
+            raise Exception(f"Found multiple code blocks for language {language}")
+        elif count == 0:
+            raise Exception(f"Found no code blocks for language {language}")
+        return matching_block
 
     #
     # update_file
@@ -642,11 +735,32 @@ class InteractiveShell(cmd.Cmd):
             args = self.parser.parse_args(f'update_file {args}'.split())
         with open(args.filename) as f:
             contents = f.read()
-        question = f"The file `{args.filename}`, file contents pasted below double line breaks at end of message,"
-        question = f" according to the following instructions: `{args.instruction}`"
+        question = f"Suggest how to update the file `{args.filename}`, "
+        question += f" code suggestions contained within triple backticks, "
+        question += f" according to the following instructions: `{args.instruction}`"
         question += f"\n\n{contents}" 
-        answer = GPT().ask(question)
-        print(answer)
+        file_language = self._get_file_language(args.filename)
+        answer = GPT().ask(question, default_language=file_language)
+        print(answer.highlight())
+        while True:
+            choice = input("Accept changes? [y/n/diff/show/<new_instruction>] ")
+            if choice.lower() == 'y':
+                new_content = self.get_language_specific_code_block(answer, file_language)
+                with open(args.filename, 'w') as f:
+                    f.write(new_content)
+                print(f"Updated file `{args.filename}`")
+                break
+            elif choice.lower() == 'n':
+                break
+            elif choice.lower() == 'diff':
+                code_block = self.get_language_specific_code_block(answer, file_language)
+                display_diff(contents, code_block)
+            elif choice.lower() == 'show':
+                print(answer.highlight())
+            else:
+                new_instruction = choice
+                answer = GPT(state_name=answer.state_name).ask(new_instruction)
+                print(answer.highlight())
 
     def complete_update_file(self, text, line, begidx, endidx):
         if text:
@@ -662,7 +776,7 @@ class InteractiveShell(cmd.Cmd):
         return super().parseline(line)
 
     #
-    # update-function
+    # update_function
     #
     def do_update_function(self, arg):
         '''Prints the source of a function in a Python file.'''
@@ -670,12 +784,36 @@ class InteractiveShell(cmd.Cmd):
             args = self.parser.parse_args(f'update_function {arg}'.split())
         else:
             args = arg
-        with open(args.filename) as f:
-            module = ast.parse(f.read())
-        functions = [node for node in module.body if isinstance(node, ast.FunctionDef)]
-        for function in functions:
-            if function.name == args.function_name:
-                print(f"Found function {args.function_name} in file {args.filename}")
+        instruction = ' '.join(args.instruction)
+        file_language = self._get_file_language(args.filename)
+        if file_language != 'python':
+            raise Exception(f"update_function only supports python at the moment, not {file_language}")
+        pymod = PyMod(args.filename)
+        func_source = pymod.get_source_of_function(args.function_name)
+        question = f"Suggest how to update the function `{args.function_name}` in file `{args.filename}`, "
+        question += f" reply with code suggestions contained within triple backticks, "
+        question += f" according to the following instructions: `{instruction}`"
+        question += f"\n\n{func_source}" 
+        answer = GPT().ask(question, default_language=file_language)
+        print(answer.highlight())
+        while True:
+            choice = input("Accept changes? [y/n/diff/show/<new_instruction>] ")
+            if choice.lower() == 'y':
+                new_func_source = self.get_language_specific_code_block(answer, file_language)
+                pymod.replace_function(args.function_name, new_func_source)
+                print(f"Updated function `{args.function_name}` in file `{args.filename}`")
+                break
+            elif choice.lower() == 'n':
+                break
+            elif choice.lower() == 'diff':
+                code_block = self.get_language_specific_code_block(answer, file_language)
+                display_diff(func_source, code_block)
+            elif choice.lower() == 'show':
+                print(answer.highlight())
+            else:
+                new_instruction = choice
+                answer = GPT(state_name=answer.state_name).ask(new_instruction)
+                print(answer.highlight())
 
     def complete_update_function(self, text, line, begidx, endidx):
         args = line.split()
@@ -685,6 +823,60 @@ class InteractiveShell(cmd.Cmd):
                 module = ast.parse(f.read())
             functions = [node.name for node in module.body if isinstance(node, ast.FunctionDef)]
             return [function for function in functions if function.startswith(text)]
+        else:
+            return [
+                f for f in glob.glob(text+'*')
+                if os.path.isfile(f)
+            ]
+
+    #
+    # update_class
+    #
+    def do_update_class(self, arg):
+        '''Prints the source of a class in a Python file.'''
+        if isinstance(arg, str):
+            args = self.parser.parse_args(f'update_class {arg}'.split())
+        else:
+            args = arg
+        instruction = ' '.join(args.instruction)
+        file_language = self._get_file_language(args.filename)
+        if file_language != 'python':
+            raise Exception(f"update_class only supports python at the moment, not {file_language}")
+        pymod = PyMod(args.filename)
+        func_source = pymod.get_source_of_class(args.class_name)
+        question = f"Suggest how to update the class `{args.class_name}` in file `{args.filename}`, "
+        question += f" reply with code suggestions contained within triple backticks, "
+        question += f" according to the following instructions: `{instruction}`"
+        question += f"\n\n{func_source}" 
+        answer = GPT().ask(question, default_language=file_language)
+        print(answer.highlight())
+        while True:
+            choice = input("Accept changes? [y/n/diff/show/<new_instruction>] ")
+            if choice.lower() == 'y':
+                new_func_source = self.get_language_specific_code_block(answer, file_language)
+                pymod.replace_class(args.class_name, new_func_source)
+                print(f"Updated class `{args.class_name}` in file `{args.filename}`")
+                break
+            elif choice.lower() == 'n':
+                break
+            elif choice.lower() == 'diff':
+                code_block = self.get_language_specific_code_block(answer, file_language)
+                display_diff(func_source, code_block)
+            elif choice.lower() == 'show':
+                print(answer.highlight())
+            else:
+                new_instruction = choice
+                answer = GPT(state_name=answer.state_name).ask(new_instruction)
+                print(answer.highlight())
+
+    def complete_update_class(self, text, line, begidx, endidx):
+        args = line.split()
+        if len(args) > 2 and os.path.isfile(args[1]):
+            filename = args[1]
+            with open(filename) as f:
+                module = ast.parse(f.read())
+            classes = [node.name for node in module.body if isinstance(node, ast.ClassDef)]
+            return [class_ for class_ in classes if class_.startswith(text)]
         else:
             return [
                 f for f in glob.glob(text+'*')
@@ -744,8 +936,6 @@ if 0:
             child.expect('Hello, Alice!')
             child.sendline('quit')
 
-
-
 if __name__ == '__main__':
     import sys
     if '--test' in sys.argv:
@@ -756,7 +946,17 @@ if __name__ == '__main__':
     if len(sys.argv) > 1:
         # Command line mode
         shell = InteractiveShell()
-        shell.parser.parse_args(sys.argv[1:]).func(shell.parser.parse_args(sys.argv[1:]))
+        try:
+            shell.parser.parse_args(sys.argv[1:]).func(shell.parser.parse_args(sys.argv[1:]))
+        except:
+            extype, value, tb = sys.exc_info()
+            traceback.print_exc()
+            pdb.post_mortem(tb)
     else:
         # Interactive mode
-        InteractiveShell().cmdloop()
+        try:
+            InteractiveShell().cmdloop()
+        except:
+            extype, value, tb = sys.exc_info()
+            traceback.print_exc()
+            pdb.post_mortem(tb)
