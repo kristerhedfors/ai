@@ -1,3 +1,4 @@
+# prompt_toolkit next
 import sys
 import argparse
 import cmd
@@ -14,6 +15,7 @@ import difflib
 from termcolor import colored
 from pprint import pprint as pp
 import openai
+import openai.error
 from pygments import highlight
 from pygments.lexers import PythonLexer, GoLexer, CLexer, CppLexer, RustLexer, BashLexer
 from pygments.formatters import TerminalFormatter
@@ -227,7 +229,7 @@ foo='bar'
 
 class GPTAnswer(object):
 
-    def __init__(self, question, answer, state, state_name, default_language=None):
+    def __init__(self, question, answer, state, state_name, default_language='python'):
         self.question = question
         self.answer = answer
         self.state = state
@@ -316,7 +318,7 @@ class GPTAnswer(object):
                 self._current_language = self.default_language
             else:
                 self._current_language = max(counter, key=counter.get)
-            # fix ".c" quirk
+            # fix ".c" quirkkkk
             if self._current_language == '.c':
                 self._current_language = 'c'
         return (self._current_language, True)
@@ -343,12 +345,12 @@ class GPTAnswer(object):
             if language == current_language:
                 current_block.append(line)
             else:
-                stripped_block = '\n'.join(current_block).strip()
+                stripped_block = '\n'.join(current_block).strip() + '\n'
                 if stripped_block:
                     code_blocks.append((current_language, stripped_block))
                 current_language = language
                 current_block = [line]
-        stripped_block = '\n'.join(current_block).strip()
+        stripped_block = '\n'.join(current_block).strip() + '\n'
         if stripped_block:
             code_blocks.append((current_language, stripped_block))
         return code_blocks
@@ -499,9 +501,9 @@ This implementation creates a new temporary file in the current directory, write
 class GPT(object):
 
     state_dir = Path.home() / ".ai"
-    state_name = None
+    state_name = ''
 
-    def __init__(self, state_name=None):
+    def __init__(self, state_name=''):
         self.state_dir.mkdir(exist_ok=True)
         self.state_name = state_name or "state-{}".format(int(time.time()))
         self.state_path = self.state_dir / self.state_name
@@ -586,8 +588,8 @@ class GPT(object):
 class InteractiveShell(cmd.Cmd):
     def __init__(self):
         super().__init__()
-        self.prompt = '> '
-
+        self.prompt = '[gpt-3.5-turbo]:AISh >> '
+        self.intro = "Welcome to the AI Shell (AISh)!"
         self.parser = argparse.ArgumentParser()
         subparsers = self.parser.add_subparsers()
 
@@ -627,6 +629,13 @@ class InteractiveShell(cmd.Cmd):
         parser_run.add_argument("executable", type=str)
         parser_run.add_argument("arguments", nargs=argparse.REMAINDER)
         parser_run.set_defaults(func=self.do_run)
+
+        # run_autofix
+        parser_run_autofix = subparsers.add_parser("run_autofix")
+        parser_run_autofix.add_argument("executable", type=str)
+        parser_run_autofix.add_argument("arguments", nargs=argparse.REMAINDER)
+        parser_run_autofix.set_defaults(func=self.do_run_autofix)
+
 
         self.completion_map = {
             "ask": ["What", "When", "Where", "Why", "How"],
@@ -714,7 +723,7 @@ class InteractiveShell(cmd.Cmd):
     
     def get_language_specific_code_block(self, answer, language):
         code_blocks = answer.get_code_blocks()
-        matching_block = None
+        matching_block = ''
         count = 0
         for lang, code_block in code_blocks:
             if lang == language:
@@ -909,6 +918,48 @@ class InteractiveShell(cmd.Cmd):
                 ]
         else:
             return glob.glob('*')
+    
+    #
+    # run_autofix
+    #
+    def do_run_autofix(self, arg):
+        # invoke python file, capture output and if exception is thrown,
+        # ask GPT for a fix
+        if isinstance(arg, str):
+            args = self.parser.parse_args(f'run_autofix {arg}'.split())
+        else:
+            args = arg
+        # execute using subprocess
+        print(args.executable, args.arguments)
+        p = subprocess.run(["python3", args.executable] + args.arguments, stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
+        output = p.stdout.decode('utf-8')
+        print(output)
+        if p.returncode != 0:
+            # exception was thrown
+            # ask GPT for a fix
+            question = f"Fix the following error in file `{args.executable}`: \n\n{output}"
+            answer = GPT().ask(question, default_language='python')
+            print(answer.highlight())
+            while True:
+                choice = input("Accept changes? [y/n/diff/show/<new_instruction>] ")
+                if choice.lower() == 'y':
+                    new_func_source = self.get_language_specific_code_block(answer, 'python')
+                    with open(args.executable, 'w') as f:
+                        f.write(new_func_source)
+                    print(f"Updated file `{args.executable}`")
+                    break
+                elif choice.lower() == 'n':
+                    break
+                elif choice.lower() == 'diff':
+                    code_block = self.get_language_specific_code_block(answer, 'python')
+                    display_diff(output, code_block)
+                elif choice.lower() == 'show':
+                    print(answer.highlight())
+                else:
+                    new_instruction = choice
+                    answer = GPT(state_name=answer.state_name).ask(new_instruction)
+                    print(answer.highlight())
+                
 
 
 import subprocess
