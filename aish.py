@@ -99,7 +99,7 @@ class PyMod(object):
         ''' returns source code of func_name in file_path'''
         return self.get_source_of_node(func_name, ast.FunctionDef)
     
-    def replace_node(self, node_name, new_node_source, node_type):
+    def replace_node(self, node_type, node_name, new_node_source):
         source_lines = self.readlines()
         module = ast.parse(''.join(source_lines))
         for node in module.body:
@@ -113,14 +113,14 @@ class PyMod(object):
         self.write(''.join(new_source_lines))
 
     def replace_function(self, func_name, new_func_source):
-        return self.replace_node(func_name, new_func_source, ast.FunctionDef)
+        return self.replace_node(ast.FunctionDef, func_name, new_func_source)
     
     def get_source_of_class(self, class_name):
         ''' returns source code of class_name in file_path'''
         return self.get_source_of_node(class_name, ast.ClassDef)
 
     def replace_class(self, class_name, new_class_source):
-        return self.replace_node(class_name, new_class_source, ast.ClassDef)
+        return self.replace_node(ast.ClassDef, class_name, new_class_source)
     
     def replace_code(self, new_code):
         '''for each node found through ast in new_code, replace the corresponding node in file_path'''
@@ -432,7 +432,7 @@ nice huh? here we to some terminal stuff and in the terminal we invoke a python 
 since we love
 look here
 ```
-$ find . -name '*.py' | xargs grep 'def' | ./aish.py update_function aish.py test1
+$ find . -name '*.py' | xargs grep 'def' | ./aish.py update-function aish.py test1
 ```
     '''
     def test_highlight():
@@ -469,7 +469,7 @@ nice huh? here we to some terminal stuff and in the terminal we invoke a python 
 since we love
 look here
 ```
-$ find . -name '*.py' | xargs grep 'def' | ./aish.py update_function aish.py test1
+$ find . -name '*.py' | xargs grep 'def' | ./aish.py update-function aish.py test1
 ``` '''
 
     answer3 = '''
@@ -535,7 +535,7 @@ This implementation creates a new temporary file in the current directory, write
         self.assertEqual(code_blocks[0][1], 'Hey look at this dope python code I wrote:\n')
         self.assertEqual(code_blocks[1][1], 'def test1():\n    print("Hello1")\n')
         self.assertEqual(code_blocks[2][1], 'nice huh? here we to some terminal stuff and in the terminal we invoke a python script\nsince we love\nlook here\n')
-        self.assertEqual(code_blocks[3][1], '$ find . -name \'*.py\' | xargs grep \'def\' | ./aish.py update_function aish.py test1\n')
+        self.assertEqual(code_blocks[3][1], '$ find . -name \'*.py\' | xargs grep \'def\' | ./aish.py update-function aish.py test1\n')
     
     def test_get_code_blocks3(self):
         answer = GPTAnswer("", self.answer3, {}, None, default_language="c")
@@ -652,26 +652,6 @@ class InteractiveShell(cmd.Cmd):
         parser_summarize_file.add_argument("filename", type=str)
         parser_summarize_file.set_defaults(func=self.do_summarize_file)
 
-        # update_file
-        parser_update_file = subparsers.add_parser("update_file")
-        parser_update_file.add_argument("filename", type=str)
-        parser_update_file.add_argument("instruction", nargs=argparse.REMAINDER)
-        parser_update_file.set_defaults(func=self.do_update_file)
-    
-        # update_function
-        parser_update_function = subparsers.add_parser("update_function")
-        parser_update_function.add_argument("filename", type=str)
-        parser_update_function.add_argument("function_name", type=str)
-        parser_update_function.add_argument("instruction", nargs=argparse.REMAINDER)
-        parser_update_function.set_defaults(func=self.do_update_function)
-
-        # update_class
-        parser_update_class = subparsers.add_parser("update_class")
-        parser_update_class.add_argument("filename", type=str)
-        parser_update_class.add_argument("class_name", type=str)
-        parser_update_class.add_argument("instruction", nargs=argparse.REMAINDER)
-        parser_update_class.set_defaults(func=self.do_update_class)
-
         # run
         parser_run = subparsers.add_parser("run")
         parser_run.add_argument("executable", type=str)
@@ -689,8 +669,6 @@ class InteractiveShell(cmd.Cmd):
             "ask": ["What", "When", "Where", "Why", "How"],
             "run": glob.glob('*'),
             "summarize_file": glob.glob('*'),
-            "update_file": glob.glob('*'),
-            "update_function": glob.glob('*')
         }
 
     #
@@ -783,162 +761,10 @@ class InteractiveShell(cmd.Cmd):
             raise Exception(f"Found no code blocks for language {language}")
         return matching_block
 
-    #
-    # update_file
-    #
-    def do_update_file(self, args):
-        '''Updates the modification time of a file to the current time.'''
-        if isinstance(args, str):
-            args = self.parser.parse_args(f'update_file {args}'.split())
-        with open(args.filename) as f:
-            contents = f.read()
-        question = f"Suggest how to update the file `{args.filename}`, "
-        question += f" code suggestions contained within triple backticks, "
-        question += f" according to the following instructions: `{args.instruction}`"
-        question += f"\n\n{contents}" 
-        file_language = self._get_file_language(args.filename)
-        answer = GPT().ask(question, default_language=file_language)
-        print(answer.highlight())
-        while True:
-            choice = input("Accept changes? [y/n/diff/show/<new_instruction>] ")
-            if choice.lower() == 'y':
-                new_content = self.get_language_specific_code_block(answer, file_language)
-                with open(args.filename, 'w') as f:
-                    f.write(new_content)
-                print(f"Updated file `{args.filename}`")
-                break
-            elif choice.lower() == 'n':
-                break
-            elif choice.lower() == 'diff':
-                code_block = self.get_language_specific_code_block(answer, file_language)
-                display_diff(contents, code_block)
-            elif choice.lower() == 'show':
-                print(answer.highlight())
-            else:
-                new_instruction = choice
-                answer = GPT(state_name=answer.state_name).ask(new_instruction)
-                print(answer.highlight())
-
-    def complete_update_file(self, text, line, begidx, endidx):
-        if text:
-            return [
-                f for f in glob.glob(text+'*') 
-                #if os.path.isfile(f)
-            ]
-        else:
-            return glob.glob('*')
-
     def parseline(self, line):
         self.last_command = line
         return super().parseline(line)
 
-    #
-    # update_function
-    #
-    def do_update_function(self, arg):
-        '''Prints the source of a function in a Python file.'''
-        if isinstance(arg, str):
-            args = self.parser.parse_args(f'update_function {arg}'.split())
-        else:
-            args = arg
-        instruction = ' '.join(args.instruction)
-        file_language = self._get_file_language(args.filename)
-        if file_language != 'python':
-            raise Exception(f"update_function only supports python at the moment, not {file_language}")
-        pymod = PyMod(args.filename)
-        func_source = pymod.get_source_of_function(args.function_name)
-        question = f"Suggest how to update the function `{args.function_name}` in file `{args.filename}`, "
-        question += f" reply with code suggestions contained within triple backticks, "
-        question += f" according to the following instructions: `{instruction}`"
-        question += f"\n\n{func_source}" 
-        answer = GPT().ask(question, default_language=file_language)
-        print(answer.highlight())
-        while True:
-            choice = input("Accept changes? [y/n/diff/show/<new_instruction>] ")
-            if choice.lower() == 'y':
-                new_func_source = self.get_language_specific_code_block(answer, file_language)
-                pymod.replace_function(args.function_name, new_func_source)
-                print(f"Updated function `{args.function_name}` in file `{args.filename}`")
-                break
-            elif choice.lower() == 'n':
-                break
-            elif choice.lower() == 'diff':
-                code_block = self.get_language_specific_code_block(answer, file_language)
-                display_diff(func_source, code_block)
-            elif choice.lower() == 'show':
-                print(answer.highlight())
-            else:
-                new_instruction = choice
-                answer = GPT(state_name=answer.state_name).ask(new_instruction)
-                print(answer.highlight())
-
-    def complete_update_function(self, text, line, begidx, endidx):
-        args = line.split()
-        if len(args) > 2 and os.path.isfile(args[1]):
-            filename = args[1]
-            with open(filename) as f:
-                module = ast.parse(f.read())
-            functions = [node.name for node in module.body if isinstance(node, ast.FunctionDef)]
-            return [function for function in functions if function.startswith(text)]
-        else:
-            return [
-                f for f in glob.glob(text+'*')
-                if os.path.isfile(f)
-            ]
-
-    #
-    # update_class
-    #
-    def do_update_class(self, arg):
-        '''Prints the source of a class in a Python file.'''
-        if isinstance(arg, str):
-            args = self.parser.parse_args(f'update_class {arg}'.split())
-        else:
-            args = arg
-        instruction = ' '.join(args.instruction)
-        file_language = self._get_file_language(args.filename)
-        if file_language != 'python':
-            raise Exception(f"update_class only supports python at the moment, not {file_language}")
-        pymod = PyMod(args.filename)
-        func_source = pymod.get_source_of_class(args.class_name)
-        question = f"Suggest how to update the class `{args.class_name}` in file `{args.filename}`, "
-        question += f" reply with code suggestions contained within triple backticks, "
-        question += f" according to the following instructions: `{instruction}`"
-        question += f"\n\n{func_source}" 
-        answer = GPT().ask(question, default_language=file_language)
-        print(answer.highlight())
-        while True:
-            choice = input("Accept changes? [y/n/diff/show/<new_instruction>] ")
-            if choice.lower() == 'y':
-                new_func_source = self.get_language_specific_code_block(answer, file_language)
-                pymod.replace_class(args.class_name, new_func_source)
-                print(f"Updated class `{args.class_name}` in file `{args.filename}`")
-                break
-            elif choice.lower() == 'n':
-                break
-            elif choice.lower() == 'diff':
-                code_block = self.get_language_specific_code_block(answer, file_language)
-                display_diff(func_source, code_block)
-            elif choice.lower() == 'show':
-                print(answer.highlight())
-            else:
-                new_instruction = choice
-                answer = GPT(state_name=answer.state_name).ask(new_instruction)
-                print(answer.highlight())
-
-    def complete_update_class(self, text, line, begidx, endidx):
-        args = line.split()
-        if len(args) > 2 and os.path.isfile(args[1]):
-            filename = args[1]
-            with open(filename) as f:
-                module = ast.parse(f.read())
-            classes = [node.name for node in module.body if isinstance(node, ast.ClassDef)]
-            return [class_ for class_ in classes if class_.startswith(text)]
-        else:
-            return [
-                f for f in glob.glob(text+'*')
-                if os.path.isfile(f)
-            ]
     #
     # run
     #
@@ -1034,11 +860,40 @@ class PythonFunctionCompleter(Completer):
         return [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
 
 
+class PythonClassCompleter(Completer):
+    def __init__(self, filename):
+        self.filename = filename
+        self.class_names = self.get_class_names(filename)
+        self.completer = WordCompleter(self.class_names, ignore_case=True)
+    
+    def get_completions(self, document: Document, complete_event):
+        for completion in self.completer.get_completions(document, complete_event):
+            yield completion
+
+    @staticmethod
+    def get_class_names(filename):
+        with open(filename) as f:
+            source = f.read()
+        tree = ast.parse(source)
+        return [node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+
+
 class CustomCompleter(Completer):
-    commands = ['update_file', 'update_function', 'add_numbers', 'help']
-    command_completer = WordCompleter(commands, ignore_case=True)
+    commands = []
+    command_names = []
+    #command_completer = WordCompleter(commands, ignore_case=True)
     path_completer = PathCompleter()
     function_completer = None
+    class_completer = None
+
+    @classmethod
+    def register_command(cls, command):
+        cls.commands.append(command)
+        cls.command_names.append(command.command_name)
+
+    def __init__(self, *args, **kw):
+        super().__init__(*args, **kw)
+        self.command_completer = WordCompleter(self.command_names, ignore_case=True)
 
     def get_completions(self, document: Document, complete_event):
         words = document.text.split(' ')
@@ -1047,13 +902,15 @@ class CustomCompleter(Completer):
         if len(words) == 1:
             for completion in self.command_completer.get_completions(document, complete_event):
                 yield completion
+
         elif len(words) >= 2:
-            if words[0] == 'update_file':
+            if words[0] == 'update-file':
                 # Complete the file path
                 if len(words) == 2:
                     for completion in self.path_completer.get_completions(Document(words[1]), complete_event):
                         yield completion
-            elif words[0] == 'update_function':
+
+            elif words[0] == 'update-function':
                 # Complete the file path
                 if len(words) == 2:
                     for completion in self.path_completer.get_completions(Document(words[1]), complete_event):
@@ -1064,6 +921,19 @@ class CustomCompleter(Completer):
                         self.function_completer = PythonFunctionCompleter(words[1])
                     for completion in self.function_completer.get_completions(Document(words[2]), complete_event):
                         yield completion
+
+            elif words[0] == 'update-class':
+                # Complete the file path
+                if len(words) == 2:
+                    for completion in self.path_completer.get_completions(Document(words[1]), complete_event):
+                        yield completion
+                # Complete the class name
+                elif len(words) == 3 and words[1].endswith('.py'):
+                    if self.class_completer is None or self.class_completer.filename != words[1]:
+                        self.class_completer = PythonClassCompleter(words[1])
+                    for completion in self.class_completer.get_completions(Document(words[2]), complete_event):
+                        yield completion
+
             elif words[0] == 'help':
                 for completion in self.command_completer.get_completions(Document(' '.join(words[1:])), complete_event):
                     yield completion
@@ -1071,28 +941,29 @@ class CustomCompleter(Completer):
 
 def help(args):
     help_texts = {
-        'update_file': 'update_file <file>: Updates the specified file',
-        'update_function': 'update_function <file> <function>: Updates the specified function in the file',
-        'add_numbers': 'add_numbers <nums>: Adds the specified numbers',
+        'update-file': 'update-file <file>: Updates the specified file',
+        'update-function': 'update-function <file> <function>: Updates the specified function in the file',
+        'add-numbers': 'add-numbers <nums>: Adds the specified numbers',
         'help': 'help <command>: Shows help text for the specified command'
     }
     print(help_texts.get(args[0], 'Unknown command'))
 
 
 class Command(object):
-    name=''
+    command_name=''
     help_text=''
 
     def __init__(self, subparsers):
-        self.parser = subparsers.add_parser(self.name)
+        self.parser = subparsers.add_parser(self.command_name)
         self.parser.set_defaults(func=self.func)
         self._init_arguments()
+        CustomCompleter.register_command(self)
     
     def _init_arguments(self):
         pass
     
     def func(self, args):
-        print(f"{self.name} executed with arguments: {args}")
+        print(f"{self.command_name} executed with arguments: {args}")
 
 
 class _LanguageHelpers(object):
@@ -1125,35 +996,111 @@ class _LanguageHelpers(object):
         if count > 1:
             raise Exception(f"Found multiple code blocks for language {language}")
         elif count == 0:
-            raise Exception(f"Found no code blocks for language {language}")
+            lang, code_block = code_blocks[0]
+            # try parse code_block as python code
+            try:
+                ast.parse(code_block)
+            except SyntaxError:
+                raise Exception(f"Found no code blocks for language {language}. Parsing the first code block as {lang} failed: {code_block}")
+            else:
+                matching_block = code_block
         return matching_block
 
 
-class UpdateFileCommand(Command, _LanguageHelpers):
-    name = 'update_file'
-    help_text = 'update_file <file>: Updates the specified file'
+class _PythonCommandHelpers(object):
+    def _update_node(self, command_name, file_path, node_type, node_name, instruction):
+        instruction = ' '.join(instruction)
+        file_language = self._get_file_language(file_path)
+        if file_language != 'python':
+            raise Exception(f"{command_name} only supports python at the moment, not {file_language}")
+        pymod = PyMod(file_path)
+        node_source = pymod.get_source_of_node(node_name, node_type)
+        question = f"Suggest how to update the {node_type} `{node_name}` in file `{file_path}`, "
+        question += f" reply with code suggestions contained within triple backticks, "
+        question += f" according to the following instructions: `{instruction}`"
+        question += f"\n\n{node_source}" 
+        answer = GPT().ask(question, default_language=file_language)
+        print(answer.highlight())
+        while True:
+            choice = input(f"[{self.command_name}] Accept changes? [y/n/diff/show/<new_instruction>] ")
+            if choice.strip() == '':
+                continue
+            elif choice.lower() == 'y':
+                new_node_source = self.get_language_specific_code_block(answer, file_language)
+                pymod.replace_node(node_type, node_name, new_node_source)
+                print(f"Updated function `{node_name}` in file `{file_path}`")
+                break
+            elif choice.lower() == 'n':
+                break
+            elif choice.lower() == 'diff':
+                code_block = self.get_language_specific_code_block(answer, file_language)
+                display_diff(node_source, code_block)
+            elif choice.lower() == 'show':
+                print(answer.highlight())
+            else:
+                new_instruction = choice
+                answer = GPT(state_name=answer.state_name).ask(new_instruction)
+                print(answer.highlight())
 
-    def _init_arguments(self):
-        self.parser.add_argument('file', help='File to be updated')
-    
-    def func(self, args):
-        print(f"{self.name} executed with arguments: {args}")
 
-
-class UpdateFunctionCommand(Command, _LanguageHelpers):
-    name = 'update_function'
-    help_text = 'update_function <file_path> <func_name>: Updates the specified function in the file'
+class UpdateFileCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
+    command_name = 'update-file'
+    help_text = 'update-file <file_path> <instruction...>: Updates the specified file'
 
     def _init_arguments(self):
         self.parser.add_argument('file_path', help='File to be updated')
+        self.parser.add_argument('instruction', nargs='+', help='Update instruction to GPT')
+    
+    def func(self, args):
+        print(f"{self.command_name} executed with arguments: {args}")
+        instruction = ' '.join(args.instruction)
+        with open(args.file_path) as f:
+            contents = f.read()
+        question = f"Suggest how to update the file `{args.file_path}`, "
+        question += f" code suggestions contained within triple backticks, "
+        question += f" according to the following instructions: `{instruction}`"
+        question += f"\n\n{contents}" 
+        file_language = self._get_file_language(args.file_path)
+        answer = GPT().ask(question, default_language=file_language)
+        print(answer.highlight())
+        while True:
+            choice = input("Accept changes? [y/n/diff/show/<new_instruction>] ")
+            if choice.strip() == '':
+                continue
+            elif choice.lower() == 'y':
+                new_content = self.get_language_specific_code_block(answer, file_language)
+                with open(args.file_path, 'w') as f:
+                    f.write(new_content)
+                print(f"Updated file `{args.file_path}`")
+                break
+            elif choice.lower() == 'n':
+                break
+            elif choice.lower() == 'diff':
+                code_block = self.get_language_specific_code_block(answer, file_language)
+                display_diff(contents, code_block)
+            elif choice.lower() == 'show':
+                print(answer.highlight())
+            else:
+                new_instruction = choice
+                answer = GPT(state_name=answer.state_name).ask(new_instruction)
+                print(answer.highlight())
+
+
+class UpdateFunctionCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
+    command_name = 'update-function'
+    help_text = 'update-function <file_path> <func_name>: Updates the specified function in the file'
+
+    def _init_arguments(self):
+        self.parser.add_argument('file_path', help='File containing function')
         self.parser.add_argument('func_name', help='Function to be updated')
         self.parser.add_argument('instruction', nargs='+', help='Update instruction to GPT')
     
     def func(self, args):
+        return self._update_node(self.command_name, args.file_path, ast.FunctionDef, args.func_name, args.instruction)
         instruction = ' '.join(args.instruction)
         file_language = self._get_file_language(args.file_path)
         if file_language != 'python':
-            raise Exception(f"update_function only supports python at the moment, not {file_language}")
+            raise Exception(f"update-function only supports python at the moment, not {file_language}")
         pymod = PyMod(args.file_path)
         func_source = pymod.get_source_of_function(args.func_name)
         question = f"Suggest how to update the function `{args.func_name}` in file `{args.file_path}`, "
@@ -1182,15 +1129,28 @@ class UpdateFunctionCommand(Command, _LanguageHelpers):
                 print(answer.highlight())
 
 
+class UpdateClassCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
+    command_name = 'update-class'
+    help_text = 'update-class <file_path> <class_name>: Updates the specified class in the file'
+
+    def _init_arguments(self):
+        self.parser.add_argument('file_path', help='File containing class')
+        self.parser.add_argument('class_name', help='Class to be updated')
+        self.parser.add_argument('instruction', nargs='+', help='Update instruction to GPT')
+    
+    def func(self, args):
+        return self._update_node(self.command_name, args.file_path, ast.ClassDef, args.class_name, args.instruction)
+
+
 class AddNumbersCommand(Command):
-    name = 'add_numbers'
-    help_text = 'add_numbers <nums>: Adds the specified numbers'
+    command_name = 'add-numbers'
+    help_text = 'add-numbers <nums>: Adds the specified numbers'
 
     def _init_arguments(self):
         self.parser.add_argument('nums', nargs='+', type=int, help='Numbers to be added')
     
     def func(self, args):
-        print(f"{self.name} executed with arguments: {args}")
+        print(f"{self.command_name} executed with arguments: {args}")
 
 
 def main():
@@ -1198,7 +1158,8 @@ def main():
     subparsers = parser.add_subparsers()
 
     update_file = UpdateFileCommand(subparsers)
-    update_file = UpdateFunctionCommand(subparsers)
+    update_func = UpdateFunctionCommand(subparsers)
+    update_class = UpdateClassCommand(subparsers)
     add_numbers = AddNumbersCommand(subparsers)
 
     #parser_add_numbers = subparsers.add_parser('add_numbers')
@@ -1230,6 +1191,8 @@ def main():
             continue  # Ctrl+C pressed, let's ask for input again
         except EOFError:
             break  # Ctrl+D pressed, let's exit
+        if text.strip() == '':
+            continue
 
         args, unknown = parser.parse_known_args(text.split())
 
@@ -1239,7 +1202,7 @@ def main():
             if hasattr(args, 'func'):
                 args.func(args)
             else:
-                print("Unknown command: " + text.split()[0])
+                print(f"Unknown command: {text}")
 
 
 if __name__ == "__main__":
