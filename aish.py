@@ -1,9 +1,10 @@
-# prompt_toolkit next
+#!/usr/bin/env python3
 import sys
 import argparse
 import cmd
 import readline
 import glob
+from datetime import datetime
 import os.path
 from pathlib import Path
 import subprocess
@@ -25,14 +26,11 @@ import traceback
 import pdb
 
 
-debug_mode = True
-#debug_mode = False
+logging.basicConfig(level=logging.INFO)
 
-logging.basicConfig(level=logging.DEBUG)
 def debug(*args):
-    if debug_mode:
-        msg = ' '.join([str(arg) for arg in args])
-        logging.debug(msg)
+    msg = ' '.join([str(arg) for arg in args])
+    logging.debug(msg)
 
 
 
@@ -70,6 +68,8 @@ class PyMod(object):
     ''' 
     Represents a python module. Provides methods to read and write source code of functions and classes in the module.
     NOT THREAD SAFE
+
+    All write methods will back up the original file to f"filename.bak.%H%M%S" before writing.
     '''
 
     def __init__(self, file_path):
@@ -84,6 +84,10 @@ class PyMod(object):
             return file.readlines()
     
     def write(self, source):
+        ''' writes source to file_path, backing up the original file to f"filename.bak.%H%M%S" '''
+        backup_file_path = self.file_path + f".bak.{time.strftime('%H%M%S')}"
+        with open(backup_file_path, 'w') as file:
+            file.write(self.read())
         with open(self.file_path, 'w') as file:
             file.write(source)
 
@@ -603,7 +607,6 @@ class LLM(object):
             return "gpt-3.5-turbo"
 
     def ask(self, question, default_language=None):
-        global debug_mode
         state = self.load_state()
         model = self.load_model()
 
@@ -623,9 +626,8 @@ class LLM(object):
                 print("Rate limit exceeded, retrying...")
                 time.sleep(5)
 
-        if debug_mode:
-            print("Query: ", json.dumps(messages, indent=4))
-            print("Response: ", json.dumps(response, indent=4))
+        debug("Query: ", json.dumps(messages, indent=4))
+        debug("Response: ", json.dumps(response, indent=4))
 
         answer = response['choices'][0].message.content
         state.append({"role": "user", "content": question})
@@ -637,60 +639,6 @@ class LLM(object):
 class InteractiveShell(cmd.Cmd):
     def __init__(self):
         super().__init__()
-        self.prompt = '[gpt-3.5-turbo]:AISh >> '
-        self.intro = "Welcome to the AI Shell (AISh)!"
-        self.parser = argparse.ArgumentParser()
-        subparsers = self.parser.add_subparsers()
-
-        # run
-        parser_run = subparsers.add_parser("run")
-        parser_run.add_argument("executable", type=str)
-        parser_run.add_argument("arguments", nargs=argparse.REMAINDER)
-        parser_run.set_defaults(func=self.do_run)
-
-        # run_autofix
-        parser_run_autofix = subparsers.add_parser("run_autofix")
-        parser_run_autofix.add_argument("executable", type=str)
-        parser_run_autofix.add_argument("arguments", nargs=argparse.REMAINDER)
-        parser_run_autofix.set_defaults(func=self.do_run_autofix)
-
-        self.completion_map = {
-            "ask": ["What", "When", "Where", "Why", "How"],
-            "run": glob.glob('*'),
-            "summarize_file": glob.glob('*'),
-        }
-    
-    def _get_file_language(self, filename):
-        ''' return the language of the file, based on the file extension
-        '''
-        if filename.endswith('.py'):
-            return 'python'
-        elif filename.endswith('.go'):
-            return 'golang'
-        elif filename.endswith('.c'):
-            return 'c'
-        elif filename.endswith('.cpp'):
-            return 'cpp'
-        elif filename.endswith('.rs'):
-            return 'rust'
-        elif filename.endswith('.sh'):
-            return 'bash'
-        else:
-            return None 
-    
-    def get_language_specific_code_block(self, answer, language):
-        code_blocks = answer.get_code_blocks()
-        matching_block = ''
-        count = 0
-        for lang, code_block in code_blocks:
-            if lang == language:
-                matching_block = code_block
-                count += 1
-        if count > 1:
-            raise Exception(f"Found multiple code blocks for language {language}")
-        elif count == 0:
-            raise Exception(f"Found no code blocks for language {language}")
-        return matching_block
 
     def parseline(self, line):
         self.last_command = line
@@ -709,20 +657,6 @@ class InteractiveShell(cmd.Cmd):
         p = subprocess.run([args.executable] + args.arguments, stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
         print(p.stdout.decode('utf-8'))
     
-    def complete_run(self, text, line, begidx, endidx):
-        args = line.split()
-        if text:
-            if len(args) >= 2:
-                return [
-                    f for f in glob.glob(text+'*') 
-                    if os.path.isfile(f)
-                ]
-            else:
-                return [
-                    f for f in glob.glob(text+'*') 
-                ]
-        else:
-            return glob.glob('*')
     
     #
     # run_autofix
@@ -967,7 +901,7 @@ class _LanguageHelpers(object):
 
 
 class _PythonCommandHelpers(object):
-    def _update_node(self, command_name, file_path, node_type, node_name, instruction):
+    def _update_node(self, command_name, file_path, node_type, node_name, instruction, yes=False):
         instruction = ' '.join(instruction)
         file_language = self._get_file_language(file_path)
         if file_language != 'python':
@@ -981,7 +915,11 @@ class _PythonCommandHelpers(object):
         answer = LLM().ask(question, default_language=file_language)
         print(answer.highlight())
         while True:
-            choice = input(f"[{self.command_name}] Accept changes? [y/n/diff/show/<new_instruction>] ")
+            choice = ''
+            if yes:
+                choice = 'y'
+            else:
+                choice = input(f"[{self.command_name}] Accept changes? [y/n/diff/show/<new_instruction>] ")
             if choice.strip() == '':
                 continue
             elif choice.lower() == 'y':
@@ -1004,15 +942,17 @@ class _PythonCommandHelpers(object):
 
 class UpdateFileCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
     # TODO make update-file less language-centric to support other file types
+    # TODO decide how multiple files shall be specified on cmdline. Single argument instruction?
     command_name = 'update-file'
     help_text = 'update-file <file_path> <instruction...>: Updates the specified file'
 
     def _init_arguments(self):
+        self.parser.add_argument('-y', '--yes', action='store_true', help='Accept all changes without prompting')
         self.parser.add_argument('file_path', help='File to be updated')
         self.parser.add_argument('instruction', nargs='+', help='Update instruction to LLM')
     
     def func(self, args):
-        print(f"{self.command_name} executed with arguments: {args}")
+        debug(f"{self.command_name} executed with arguments: {args}")
         instruction = ' '.join(args.instruction)
         with open(args.file_path) as f:
             contents = f.read()
@@ -1024,11 +964,19 @@ class UpdateFileCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
         answer = LLM().ask(question, default_language=file_language)
         print(answer.highlight())
         while True:
-            choice = input("Accept changes? [y/n/diff/show/<new_instruction>] ")
+            choice = None
+            if args.yes:
+                choice = 'y'
+            else:
+                choice = input("Accept changes? [y/n/diff/show/<new_instruction>] ")
+            
             if choice.strip() == '':
                 continue
             elif choice.lower() == 'y':
                 new_content = self.get_language_specific_code_block(answer, file_language)
+                backup_file_path = f"{args.file_path}.bak.{datetime.now().strftime('%H%M%S')}"
+                with open(backup_file_path, 'w') as f:
+                    f.write(contents)
                 with open(args.file_path, 'w') as f:
                     f.write(new_content)
                 print(f"Updated file `{args.file_path}`")
@@ -1046,17 +994,75 @@ class UpdateFileCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
                 print(answer.highlight())
 
 
+class UpdateFilesCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
+    # TODO make update-file less language-centric to support other file types
+    # TODO decide how multiple files shall be specified on cmdline. Single argument instruction?
+    # WORKS on cmdline but not in interactive shell
+    command_name = 'update-files'
+    help_text = 'update-files [-y] "instruction" files...: Update files according to instruction:'
+
+    def _init_arguments(self):
+        self.parser.add_argument('-y', '--yes', action='store_true', help='Accept all changes without prompting')
+        self.parser.add_argument('instruction', help='File update instruction to LLM')
+        self.parser.add_argument('files', nargs='+', help='Files to be updated')
+    
+    def func(self, args):
+        debug(f"{self.command_name} executed with arguments: {args}")
+        instruction = args.instruction
+        for file_path in args.files:
+            with open(file_path) as f:
+                contents = f.read()
+            question = f"Suggest how to update the file `{file_path}`, "
+            question += f" code suggestions contained within triple backticks, "
+            question += f" according to the following instructions: `{instruction}`"
+            question += f"\n\n{contents}" 
+            file_language = self._get_file_language(file_path)
+            answer = LLM().ask(question, default_language=file_language)
+            print(answer.highlight())
+            while True:
+                choice = None
+                if args.yes:
+                    choice = 'y'
+                else:
+                    choice = input("Accept changes? [y/n/diff/show/<new_instruction>] ")
+                
+                if choice.strip() == '':
+                    continue
+                elif choice.lower() == 'y':
+                    new_content = self.get_language_specific_code_block(answer, file_language)
+                    backup_file_path = f"{file_path}.bak.{datetime.now().strftime('%H%M%S')}"
+                    with open(backup_file_path, 'w') as f:
+                        f.write(contents)
+                    with open(file_path, 'w') as f:
+                        f.write(new_content)
+                    print(f"Updated file `{file_path}`")
+                    break
+                elif choice.lower() == 'n':
+                    break
+                elif choice.lower() == 'diff':
+                    code_block = self.get_language_specific_code_block(answer, file_language)
+                    display_diff(contents, code_block)
+                elif choice.lower() == 'show':
+                    print(answer.highlight())
+                else:
+                    new_instruction = choice
+                    answer = LLM(state_name=answer.state_name).ask(new_instruction)
+                    print(answer.highlight())
+
+
 class UpdateFunctionCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
     command_name = 'update-function'
     help_text = 'update-function <file_path> <func_name>: Updates the specified function in the file'
 
     def _init_arguments(self):
+        self.parser.add_argument('-y', '--yes', action='store_true', help='Accept all changes without prompting')
         self.parser.add_argument('file_path', help='File containing function')
         self.parser.add_argument('func_name', help='Function to be updated')
         self.parser.add_argument('instruction', nargs='+', help='Update instruction to LLM')
     
     def func(self, args):
-        return self._update_node(self.command_name, args.file_path, ast.FunctionDef, args.func_name, args.instruction)
+        return self._update_node(self.command_name, args.file_path, ast.FunctionDef, args.func_name,
+                                 args.instruction, yes=args.yes)
 
 
 class UpdateClassCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
@@ -1064,12 +1070,14 @@ class UpdateClassCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
     help_text = 'update-class <file_path> <class_name>: Updates the specified class in the file'
 
     def _init_arguments(self):
+        self.parser.add_argument('-y', '--yes', action='store_true', help='Accept all changes without prompting')
         self.parser.add_argument('file_path', help='File containing class')
         self.parser.add_argument('class_name', help='Class to be updated')
         self.parser.add_argument('instruction', nargs='+', help='Update instruction to LLM')
     
     def func(self, args):
-        return self._update_node(self.command_name, args.file_path, ast.ClassDef, args.class_name, args.instruction)
+        return self._update_node(self.command_name, args.file_path, ast.ClassDef, args.class_name,
+                                 args.instruction, yes=args.yes)
 
         
 class ListFunctionsCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
@@ -1115,11 +1123,14 @@ class AddNumbersCommand(Command):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument('--test', action='store_true', help='Run tests')
+    parser.add_argument('--debug', action='store_true', help='Enable debugging')
     subparsers = parser.add_subparsers()
 
     ask = AskCommand(subparsers)
     summarize_file = SummarizeFileCommand(subparsers)
     update_file = UpdateFileCommand(subparsers)
+    update_files = UpdateFilesCommand(subparsers)
     update_func = UpdateFunctionCommand(subparsers)
     update_class = UpdateClassCommand(subparsers)
     list_functions = ListFunctionsCommand(subparsers)
@@ -1128,6 +1139,8 @@ def main():
 
     if len(sys.argv) != 1:  # No arguments, switch to interactive mode
         args = parser.parse_args()
+        if args.debug:
+            logging.basicConfig(level=logging.DEBUG)
         return args.func(args)
     # 
     # interactive mode
