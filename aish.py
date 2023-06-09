@@ -6,6 +6,7 @@ import readline
 import glob
 import os.path
 from pathlib import Path
+import subprocess
 import ast
 import json
 import time
@@ -275,7 +276,7 @@ foo='bar'
         self.assertEqual(class_source, 'class Test2:\n    def __init__(self):\n        print("Goodbye2")\n')
 
 
-class GPTAnswer(object):
+class LLMAnswer(object):
 
     def __init__(self, question, answer, state, state_name, default_language='python'):
         self.question = question
@@ -404,7 +405,7 @@ class GPTAnswer(object):
         return code_blocks
     
     def highlight(self):
-        ''' return the GPT answer, with syntax highlighting for code blocks
+        ''' return the LLM answer, with syntax highlighting for code blocks
         '''
         if self._highlighted_answer is not None:
             return self._highlighted_answer
@@ -436,12 +437,12 @@ $ find . -name '*.py' | xargs grep 'def' | ./aish.py update-function aish.py tes
 ```
     '''
     def test_highlight():
-        answer = GPTAnswer("", answer1, {}, None)
+        answer = LLMAnswer("", answer1, {}, None)
         # assert that the first code block is python
         print(answer.highlight())
 
     def test_get_code_blocks():
-        answer = GPTAnswer("", answer1, {}, None)
+        answer = LLMAnswer("", answer1, {}, None)
         pp(answer.get_code_blocks())
 
     #test_highlight()
@@ -449,7 +450,7 @@ $ find . -name '*.py' | xargs grep 'def' | ./aish.py update-function aish.py tes
     sys.exit()
 
 
-class Test_GPTAnswer(unittest.TestCase):
+class Test_LLMAnswer(unittest.TestCase):
     answer1 = '''
 Hey look at this dope python code I wrote:
 ```python
@@ -514,7 +515,7 @@ This implementation creates a new temporary file in the current directory, write
 '''
 
     def test_get_code_blocks(self):
-        answer = GPTAnswer("", self.answer1, {}, None, default_language="brainfuck")
+        answer = LLMAnswer("", self.answer1, {}, None, default_language="brainfuck")
         code_blocks = answer.get_code_blocks()
         self.assertEqual(len(code_blocks), 3)
         self.assertEqual(code_blocks[0][0], None)
@@ -525,7 +526,7 @@ This implementation creates a new temporary file in the current directory, write
         self.assertEqual(code_blocks[2][1], 'nice huh?\n')
 
     def test_get_code_blocks2(self):
-        answer = GPTAnswer("", self.answer2, {}, None, default_language="malbolge")
+        answer = LLMAnswer("", self.answer2, {}, None, default_language="malbolge")
         code_blocks = answer.get_code_blocks()
         self.assertEqual(len(code_blocks), 4)
         self.assertEqual(code_blocks[0][0], None)
@@ -538,7 +539,7 @@ This implementation creates a new temporary file in the current directory, write
         self.assertEqual(code_blocks[3][1], '$ find . -name \'*.py\' | xargs grep \'def\' | ./aish.py update-function aish.py test1\n')
     
     def test_get_code_blocks3(self):
-        answer = GPTAnswer("", self.answer3, {}, None, default_language="c")
+        answer = LLMAnswer("", self.answer3, {}, None, default_language="c")
         code_blocks = answer.get_code_blocks()
         self.assertEqual(len(code_blocks), 3)
         self.assertEqual(code_blocks[0][0], None)
@@ -546,7 +547,7 @@ This implementation creates a new temporary file in the current directory, write
         self.assertEqual(code_blocks[2][0], None)
 
 
-class GPT(object):
+class LLM(object):
 
     state_dir = Path.home() / ".ai"
     state_name = ''
@@ -630,7 +631,7 @@ class GPT(object):
         state.append({"role": "user", "content": question})
         state.append({"role": "assistant", "content": answer})
         self.update_state(state)
-        return GPTAnswer(question, answer, state, self.state_name, default_language=default_language)
+        return LLMAnswer(question, answer, state, self.state_name, default_language=default_language)
 
 
 class InteractiveShell(cmd.Cmd):
@@ -640,17 +641,6 @@ class InteractiveShell(cmd.Cmd):
         self.intro = "Welcome to the AI Shell (AISh)!"
         self.parser = argparse.ArgumentParser()
         subparsers = self.parser.add_subparsers()
-
-        # ask
-        parser_ask = subparsers.add_parser("ask")
-        parser_ask.add_argument("question", nargs=argparse.REMAINDER)
-        parser_ask.set_defaults(func=self.do_ask)
-
-
-        # summarize_file
-        parser_summarize_file = subparsers.add_parser("summarize_file")
-        parser_summarize_file.add_argument("filename", type=str)
-        parser_summarize_file.set_defaults(func=self.do_summarize_file)
 
         # run
         parser_run = subparsers.add_parser("run")
@@ -664,70 +654,11 @@ class InteractiveShell(cmd.Cmd):
         parser_run_autofix.add_argument("arguments", nargs=argparse.REMAINDER)
         parser_run_autofix.set_defaults(func=self.do_run_autofix)
 
-
         self.completion_map = {
             "ask": ["What", "When", "Where", "Why", "How"],
             "run": glob.glob('*'),
             "summarize_file": glob.glob('*'),
         }
-
-    #
-    # ask
-    #
-    def do_ask(self, args):
-        '''Asks a question to the AI.'''
-        if isinstance(args, str):
-            args = self.parser.parse_args(f'ask {args}'.split())
-        question = ' '.join(args.question)
-        answer = GPT().ask(question)
-        print(answer)
-    
-    def complete_ask(self, text, line, begidx, endidx):
-        '''Suggest three alternative words for the next word of the command, fetched from GPT().ask(command)'''
-        if line.strip() == 'ask' or len(line.split()) == 2:
-            comp_list = [i for i in self.completion_map["ask"] if i.startswith(text)] 
-            if comp_list:
-                return comp_list
-        return []
-        #question = ' '.join(args.question)
-        pp('-------<asking>-------')
-        #answer = GPT().ask('Suggest six completion alternatives for the following sentence: ' + question)
-        # see complete_update_function to figure out completion, based on args
-        pp('-------<answer>----')
-        pp(answer)
-        pp('-------<text>------')
-        pp(text)
-        pp('-------000000------')
-        pp(answer)
-        words = answer.split()
-        return ['asd', 'qwe']
-        if text:
-            return [i for i in words if i.startswith(text)]
-        else:
-            return words
-
-    
-    #
-    # summarize_file
-    #
-    def do_summarize_file(self, args):
-        '''Summarizes the contents of a file.'''
-        if isinstance(args, str):
-            args = self.parser.parse_args(f'summarize_file {args}'.split())
-        with open(args.filename) as f:
-            contents = f.read()
-        question = f"Summarize the file `{args.filename}`, file contents pasted below:\n\n{contents}"
-        answer = GPT().ask(question)
-        print(answer)
-    
-    def complete_summarize_file(self, text, line, begidx, endidx):
-        if text:
-            return [
-                f for f in glob.glob(text+'*') 
-                if os.path.isfile(f)
-            ]
-        else:
-            return glob.glob('*')
     
     def _get_file_language(self, filename):
         ''' return the language of the file, based on the file extension
@@ -798,7 +729,7 @@ class InteractiveShell(cmd.Cmd):
     #
     def do_run_autofix(self, arg):
         # invoke python file, capture output and if exception is thrown,
-        # ask GPT for a fix
+        # ask LLM for a fix
         if isinstance(arg, str):
             args = self.parser.parse_args(f'run_autofix {arg}'.split())
         else:
@@ -810,9 +741,9 @@ class InteractiveShell(cmd.Cmd):
         print(output)
         if p.returncode != 0:
             # exception was thrown
-            # ask GPT for a fix
+            # ask LLM for a fix
             question = f"Fix the following error in file `{args.executable}`: \n\n{output}"
-            answer = GPT().ask(question, default_language='python')
+            answer = LLM().ask(question, default_language='python')
             print(answer.highlight())
             while True:
                 choice = input("Accept changes? [y/n/diff/show/<new_instruction>] ")
@@ -831,7 +762,7 @@ class InteractiveShell(cmd.Cmd):
                     print(answer.highlight())
                 else:
                     new_instruction = choice
-                    answer = GPT(state_name=answer.state_name).ask(new_instruction)
+                    answer = LLM(state_name=answer.state_name).ask(new_instruction)
                     print(answer.highlight())
                 
 
@@ -966,6 +897,34 @@ class Command(object):
         print(f"{self.command_name} executed with arguments: {args}")
 
 
+class AskCommand(Command):
+    command_name = 'ask'
+    help_text = 'ask <question>: Ask LLM a question'
+
+    def _init_arguments(self):
+        self.parser.add_argument('question', nargs='+', help='Update instruction to LLM')
+
+    def func(self, args):
+        question = ' '.join(args.question)
+        answer = LLM().ask(question)
+        print(answer)
+
+
+class SummarizeFileCommand(Command):
+    command_name = 'summarize-file'
+    help_text = 'summarize-file <file_path>: Ask LLM to summarize the contents of `file_path`'
+
+    def _init_arguments(self):
+        self.parser.add_argument('file_path', help='File to be summarized')
+    
+    def func(self, args):
+        with open(args.file_path) as f:
+            contents = f.read()
+        question = f"Summarize the file `{args.file_path}`, file contents pasted below:\n\n{contents}"
+        answer = LLM().ask(question)
+        print(answer)
+
+
 class _LanguageHelpers(object):
     def _get_file_language(self, filename):
         ''' return the language of the file, based on the file extension
@@ -1019,7 +978,7 @@ class _PythonCommandHelpers(object):
         question += f" reply with code suggestions contained within triple backticks, "
         question += f" according to the following instructions: `{instruction}`"
         question += f"\n\n{node_source}" 
-        answer = GPT().ask(question, default_language=file_language)
+        answer = LLM().ask(question, default_language=file_language)
         print(answer.highlight())
         while True:
             choice = input(f"[{self.command_name}] Accept changes? [y/n/diff/show/<new_instruction>] ")
@@ -1039,17 +998,18 @@ class _PythonCommandHelpers(object):
                 print(answer.highlight())
             else:
                 new_instruction = choice
-                answer = GPT(state_name=answer.state_name).ask(new_instruction)
+                answer = LLM(state_name=answer.state_name).ask(new_instruction)
                 print(answer.highlight())
 
 
 class UpdateFileCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
+    # TODO make update-file less language-centric to support other file types
     command_name = 'update-file'
     help_text = 'update-file <file_path> <instruction...>: Updates the specified file'
 
     def _init_arguments(self):
         self.parser.add_argument('file_path', help='File to be updated')
-        self.parser.add_argument('instruction', nargs='+', help='Update instruction to GPT')
+        self.parser.add_argument('instruction', nargs='+', help='Update instruction to LLM')
     
     def func(self, args):
         print(f"{self.command_name} executed with arguments: {args}")
@@ -1061,7 +1021,7 @@ class UpdateFileCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
         question += f" according to the following instructions: `{instruction}`"
         question += f"\n\n{contents}" 
         file_language = self._get_file_language(args.file_path)
-        answer = GPT().ask(question, default_language=file_language)
+        answer = LLM().ask(question, default_language=file_language)
         print(answer.highlight())
         while True:
             choice = input("Accept changes? [y/n/diff/show/<new_instruction>] ")
@@ -1082,7 +1042,7 @@ class UpdateFileCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
                 print(answer.highlight())
             else:
                 new_instruction = choice
-                answer = GPT(state_name=answer.state_name).ask(new_instruction)
+                answer = LLM(state_name=answer.state_name).ask(new_instruction)
                 print(answer.highlight())
 
 
@@ -1093,40 +1053,10 @@ class UpdateFunctionCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
     def _init_arguments(self):
         self.parser.add_argument('file_path', help='File containing function')
         self.parser.add_argument('func_name', help='Function to be updated')
-        self.parser.add_argument('instruction', nargs='+', help='Update instruction to GPT')
+        self.parser.add_argument('instruction', nargs='+', help='Update instruction to LLM')
     
     def func(self, args):
         return self._update_node(self.command_name, args.file_path, ast.FunctionDef, args.func_name, args.instruction)
-        instruction = ' '.join(args.instruction)
-        file_language = self._get_file_language(args.file_path)
-        if file_language != 'python':
-            raise Exception(f"update-function only supports python at the moment, not {file_language}")
-        pymod = PyMod(args.file_path)
-        func_source = pymod.get_source_of_function(args.func_name)
-        question = f"Suggest how to update the function `{args.func_name}` in file `{args.file_path}`, "
-        question += f" reply with code suggestions contained within triple backticks, "
-        question += f" according to the following instructions: `{instruction}`"
-        question += f"\n\n{func_source}" 
-        answer = GPT().ask(question, default_language=file_language)
-        print(answer.highlight())
-        while True:
-            choice = input("Accept changes? [y/n/diff/show/<new_instruction>] ")
-            if choice.lower() == 'y':
-                new_func_source = self.get_language_specific_code_block(answer, file_language)
-                pymod.replace_function(args.func_name, new_func_source)
-                print(f"Updated function `{args.func_name}` in file `{args.file_path}`")
-                break
-            elif choice.lower() == 'n':
-                break
-            elif choice.lower() == 'diff':
-                code_block = self.get_language_specific_code_block(answer, file_language)
-                display_diff(func_source, code_block)
-            elif choice.lower() == 'show':
-                print(answer.highlight())
-            else:
-                new_instruction = choice
-                answer = GPT(state_name=answer.state_name).ask(new_instruction)
-                print(answer.highlight())
 
 
 class UpdateClassCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
@@ -1136,10 +1066,40 @@ class UpdateClassCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
     def _init_arguments(self):
         self.parser.add_argument('file_path', help='File containing class')
         self.parser.add_argument('class_name', help='Class to be updated')
-        self.parser.add_argument('instruction', nargs='+', help='Update instruction to GPT')
+        self.parser.add_argument('instruction', nargs='+', help='Update instruction to LLM')
     
     def func(self, args):
         return self._update_node(self.command_name, args.file_path, ast.ClassDef, args.class_name, args.instruction)
+
+        
+class ListFunctionsCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
+    command_name = 'list-functions'
+    help_text = 'list-functions <file_path>: Lists the functions in the specified file'
+
+    def _init_arguments(self):
+        self.parser.add_argument('file_path', help='Python file containing functions')
+    
+    def func(self, args):
+        with open(args.file_path) as f:
+            source = f.read()
+        tree = ast.parse(source)
+        function_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
+        print('\n'.join(function_names))
+
+
+class ListClassesCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
+    command_name = 'list-classes'
+    help_text = 'list-classes <file_path>: Lists the classes in the specified file'
+
+    def _init_arguments(self):
+        self.parser.add_argument('file_path', help='Python file containing classes')
+    
+    def func(self, args):
+        with open(args.file_path) as f:
+            source = f.read()
+        tree = ast.parse(source)
+        class_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+        print('\n'.join(class_names))
 
 
 class AddNumbersCommand(Command):
@@ -1157,14 +1117,14 @@ def main():
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers()
 
+    ask = AskCommand(subparsers)
+    summarize_file = SummarizeFileCommand(subparsers)
     update_file = UpdateFileCommand(subparsers)
     update_func = UpdateFunctionCommand(subparsers)
     update_class = UpdateClassCommand(subparsers)
+    list_functions = ListFunctionsCommand(subparsers)
+    list_classes = ListClassesCommand(subparsers)
     add_numbers = AddNumbersCommand(subparsers)
-
-    #parser_add_numbers = subparsers.add_parser('add_numbers')
-    #parser_add_numbers.set_defaults(func=add_numbers)
-    #parser_add_numbers.add_argument('nums', nargs='+', type=int, help='Numbers to be added')
 
     if len(sys.argv) != 1:  # No arguments, switch to interactive mode
         args = parser.parse_args()
