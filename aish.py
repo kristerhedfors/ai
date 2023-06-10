@@ -27,6 +27,7 @@ import traceback
 import pdb
 import asyncio
 import copy
+import httpx
 
 
 logging.basicConfig(level=logging.INFO)
@@ -35,6 +36,30 @@ def debug(*args):
     msg = ' '.join([str(arg) for arg in args])
     logging.debug(msg)
 
+
+def _send_to_openai(endpoint_url: str,):
+    async def send_to_openai(api_key: str, timeout: float, payload: dict) -> httpx.Response:
+        """
+        Send a request to openai.
+        :param api_key: your api key
+        :param timeout: timeout in seconds
+        :param payload: the request body, as detailed here: https://beta.openai.com/docs/api-reference
+        """
+        async with httpx.AsyncClient() as client:
+            return await client.post(
+                url=endpoint_url,
+                json=payload,
+                headers={"content_type": "application/json", "Authorization": f"Bearer {api_key}"},
+                timeout=timeout,
+            )
+
+    return send_to_openai
+
+
+complete = _send_to_openai("https://api.openai.com/v1/completions")
+generate_img = _send_to_openai("https://api.openai.com/v1/images/generations")
+embeddings = _send_to_openai("https://api.openai.com/v1/embeddings")
+chat_complete = _send_to_openai("https://api.openai.com/v1/chat/completions")
 
 
 def display_diff(orig_string, updated_string):
@@ -641,6 +666,27 @@ class LLM(object):
         state.append({"role": "assistant", "content": answer})
         self.update_state(state)
         return LLMAnswer(question, answer, state, self.state_name, default_language=default_language)
+    
+    async def ask_async(self, question, default_language=None):
+        api_key = os.getenv("OPENAI_API_KEY")
+        assert api_key
+        messages = [{"role": "system", "content": self.system_role_desc}]
+        #for h in state:
+        #    messages.append(h)
+        messages.append({"role": "user", "content": question})
+        response = await chat_complete(
+            api_key=api_key,
+            timeout=60,
+            payload={
+                "model": "gpt-3.5-turbo",
+                "messages": messages,
+                "temperature": 0.0,
+            },
+        )
+        answer = response.json()["choices"][0]["message"]["content"]
+        #state.append({"role": "user", "content": question})
+        #state.append({"role": "assistant", "content": answer})
+        return LLMAnswer(question, answer, {}, None, default_language=default_language)
 
 
 class InteractiveShell(cmd.Cmd):
@@ -1025,7 +1071,46 @@ class MassUpdateFile(Command, _LanguageHelpers, _PythonCommandHelpers):
         asyncio.run(self.mass_update_file(args))
     
     async def _update_file(self, args):
-        return self.all_commands['update-file'].func(args)
+        debug(f"{self.command_name} executed with arguments: {args}")
+        instruction = ' '.join(args.instruction)
+        with open(args.file_path) as f:
+            contents = f.read()
+        question = f"Suggest how to update the file `{args.file_path}`, "
+        question += f" code suggestions contained within triple backticks, "
+        question += f" according to the following instructions: `{instruction}`"
+        question += f"\n\n{contents}" 
+        file_language = self._get_file_language(args.file_path)
+        answer = await LLM().ask_async(question, default_language=file_language)
+        print(answer.highlight())
+        while True:
+            choice = None
+            if args.yes:
+                choice = 'y'
+            else:
+                # add alternative to select another code block than the marked one
+                choice = input("Accept changes? [y/n/diff/show/<new_instruction>] ")
+            if choice.strip() == '':
+                continue
+            elif choice.lower() == 'y':
+                new_content = self.get_language_specific_code_block(answer, file_language)
+                backup_file_path = f"{args.file_path}.bak.{datetime.now().strftime('%H%M%S')}"
+                with open(backup_file_path, 'w') as f:
+                    f.write(contents)
+                with open(args.file_path, 'w') as f:
+                    f.write(new_content)
+                print(f"Updated file `{args.file_path}`")
+                break
+            elif choice.lower() == 'n':
+                break
+            elif choice.lower() == 'diff':
+                code_block = self.get_language_specific_code_block(answer, file_language)
+                display_diff(contents, code_block)
+            elif choice.lower() == 'show':
+                print(answer.highlight())
+            else:
+                new_instruction = choice
+                answer = LLM(state_name=answer.state_name).ask(new_instruction)
+                print(answer.highlight())
     
     async def mass_update_file(self, args):
         coroutines = []
