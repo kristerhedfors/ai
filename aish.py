@@ -7,6 +7,7 @@ import glob
 from datetime import datetime
 import os.path
 from pathlib import Path
+import shlex
 import subprocess
 import ast
 import json
@@ -24,6 +25,8 @@ from pygments.formatters import TerminalFormatter
 import logging
 import traceback
 import pdb
+import asyncio
+import copy
 
 
 logging.basicConfig(level=logging.INFO)
@@ -380,6 +383,10 @@ class LLMAnswer(object):
         ''' return a list of (language, code_block) tuples, where language is the
             language of the code block, and code_block is the joined lines of the
             code block. If language is None, the code block is plain text.
+
+            TODO: sometimes the returned file consists of a natural language statement
+            on the first line, followed simply by code without any delimiting quotes
+            or backticks.
         '''
         lines = self.answer.splitlines()
         language_tagged_lines = []
@@ -818,11 +825,18 @@ class Command(object):
     command_name=''
     help_text=''
 
+    all_commands = {}
+
+    @classmethod
+    def register(cls, self):
+        cls.all_commands[self.command_name] = self
+        CustomCompleter.register_command(self)
+
     def __init__(self, subparsers):
         self.parser = subparsers.add_parser(self.command_name)
         self.parser.set_defaults(func=self.func)
         self._init_arguments()
-        CustomCompleter.register_command(self)
+        self.__class__.register(self)
     
     def _init_arguments(self):
         pass
@@ -968,8 +982,8 @@ class UpdateFileCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
             if args.yes:
                 choice = 'y'
             else:
+                # add alternative to select another code block than the marked one
                 choice = input("Accept changes? [y/n/diff/show/<new_instruction>] ")
-            
             if choice.strip() == '':
                 continue
             elif choice.lower() == 'y':
@@ -994,12 +1008,12 @@ class UpdateFileCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
                 print(answer.highlight())
 
 
-class UpdateFilesCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
+class MassUpdateFile(Command, _LanguageHelpers, _PythonCommandHelpers):
     # TODO make update-file less language-centric to support other file types
     # TODO decide how multiple files shall be specified on cmdline. Single argument instruction?
     # WORKS on cmdline but not in interactive shell
-    command_name = 'update-files'
-    help_text = 'update-files [-y] "instruction" files...: Update files according to instruction:'
+    command_name = 'mass-update-file'
+    help_text = 'mass-update-file [-y] "instruction" files...: Update files according to instruction:'
 
     def _init_arguments(self):
         self.parser.add_argument('-y', '--yes', action='store_true', help='Accept all changes without prompting')
@@ -1008,46 +1022,21 @@ class UpdateFilesCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
     
     def func(self, args):
         debug(f"{self.command_name} executed with arguments: {args}")
-        instruction = args.instruction
+        asyncio.run(self.mass_update_file(args))
+    
+    async def _update_file(self, args):
+        return self.all_commands['update-file'].func(args)
+    
+    async def mass_update_file(self, args):
+        coroutines = []
         for file_path in args.files:
-            with open(file_path) as f:
-                contents = f.read()
-            question = f"Suggest how to update the file `{file_path}`, "
-            question += f" code suggestions contained within triple backticks, "
-            question += f" according to the following instructions: `{instruction}`"
-            question += f"\n\n{contents}" 
-            file_language = self._get_file_language(file_path)
-            answer = LLM().ask(question, default_language=file_language)
-            print(answer.highlight())
-            while True:
-                choice = None
-                if args.yes:
-                    choice = 'y'
-                else:
-                    choice = input("Accept changes? [y/n/diff/show/<new_instruction>] ")
-                
-                if choice.strip() == '':
-                    continue
-                elif choice.lower() == 'y':
-                    new_content = self.get_language_specific_code_block(answer, file_language)
-                    backup_file_path = f"{file_path}.bak.{datetime.now().strftime('%H%M%S')}"
-                    with open(backup_file_path, 'w') as f:
-                        f.write(contents)
-                    with open(file_path, 'w') as f:
-                        f.write(new_content)
-                    print(f"Updated file `{file_path}`")
-                    break
-                elif choice.lower() == 'n':
-                    break
-                elif choice.lower() == 'diff':
-                    code_block = self.get_language_specific_code_block(answer, file_language)
-                    display_diff(contents, code_block)
-                elif choice.lower() == 'show':
-                    print(answer.highlight())
-                else:
-                    new_instruction = choice
-                    answer = LLM(state_name=answer.state_name).ask(new_instruction)
-                    print(answer.highlight())
+            print(f"Updating file `{file_path}`")
+            update_file_args = copy.copy(args)
+            update_file_args.file_path = file_path
+            coroutines.append(self._update_file(update_file_args))
+        await asyncio.gather(*coroutines)
+
+
 
 
 class UpdateFunctionCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
@@ -1130,18 +1119,22 @@ def main():
     ask = AskCommand(subparsers)
     summarize_file = SummarizeFileCommand(subparsers)
     update_file = UpdateFileCommand(subparsers)
-    update_files = UpdateFilesCommand(subparsers)
+    mass_update_file = MassUpdateFile(subparsers)
     update_func = UpdateFunctionCommand(subparsers)
     update_class = UpdateClassCommand(subparsers)
     list_functions = ListFunctionsCommand(subparsers)
     list_classes = ListClassesCommand(subparsers)
     add_numbers = AddNumbersCommand(subparsers)
 
+    #
+    # command line invocation ends here
+    #
     if len(sys.argv) != 1:  # No arguments, switch to interactive mode
         args = parser.parse_args()
         if args.debug:
             logging.basicConfig(level=logging.DEBUG)
         return args.func(args)
+
     # 
     # interactive mode
     #
@@ -1167,7 +1160,8 @@ def main():
         if text.strip() == '':
             continue
 
-        args, unknown = parser.parse_known_args(text.split())
+        text = shlex.split(text)
+        args, unknown = parser.parse_known_args(text)
 
         if unknown:
             print("Unknown command or arguments: " + ' '.join(unknown))
