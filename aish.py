@@ -31,7 +31,6 @@ import httpx
 import textract
 
 
-logging.basicConfig(level=logging.INFO)
 
 def debug(*args):
     msg = ' '.join([str(arg) for arg in args])
@@ -668,26 +667,28 @@ class LLM(object):
         self.update_state(state)
         return LLMAnswer(question, answer, state, self.state_name, default_language=default_language)
     
-    async def ask_async(self, question, default_language=None):
+    async def ask_async(self, question, default_language=None, semaphore=asyncio.Semaphore(1_000_000)):
         api_key = os.getenv("OPENAI_API_KEY")
         assert api_key
         messages = [{"role": "system", "content": self.system_role_desc}]
         #for h in state:
         #    messages.append(h)
         messages.append({"role": "user", "content": question})
-        response = await chat_complete(
-            api_key=api_key,
-            timeout=60,
-            payload={
-                "model": "gpt-3.5-turbo",
-                "messages": messages,
-                "temperature": 0.0,
-            },
-        )
+        async with semaphore:
+            response = await chat_complete(
+                api_key=api_key,
+                timeout=60,
+                payload={
+                    "model": "gpt-3.5-turbo",
+                    "messages": messages,
+                    "temperature": 0.0,
+                },
+            )
         answer = response.json()["choices"][0]["message"]["content"]
         #state.append({"role": "user", "content": question})
         #state.append({"role": "assistant", "content": answer})
-        return LLMAnswer(question, answer, {}, None, default_language=default_language)
+        answer = LLMAnswer(question, answer, {}, None, default_language=default_language)
+        print(answer)
 
 
 class InteractiveShell(cmd.Cmd):
@@ -710,7 +711,6 @@ class InteractiveShell(cmd.Cmd):
         # execute using subprocess
         p = subprocess.run([args.executable] + args.arguments, stderr=subprocess.STDOUT, stdout=subprocess.PIPE)
         print(p.stdout.decode('utf-8'))
-    
     
     #
     # run_autofix
@@ -1057,6 +1057,75 @@ class UpdateFileCommand(Command, _LanguageHelpers, _PythonCommandHelpers):
                 print(answer.highlight())
 
 
+class MassAsk(Command, _LanguageHelpers, _PythonCommandHelpers):
+    command_name = 'mass-ask'
+    help_text = 'mass-ask [-n count] <question...>: Update files according to instruction:'
+
+    def _init_arguments(self):
+        self.parser.add_argument('-n', '--count', type=int, default=10, help='Ask question to LLM this many times')
+        self.parser.add_argument('-P', '--parallelism', type=int, default=10, help='Parallelsm in requests to LLM; default=10')
+        self.parser.add_argument('-I', '--xargs-I', type=str, help='Placeholder in question to replce with lines read from stdin')
+        self.parser.add_argument('question', nargs='+', help='Question to ask LLM')
+    
+    def func(self, args):
+        print(f"{self.command_name} executed with arguments: {args}")
+        time.sleep(1)
+        self.args = args
+        if args.xargs_I:
+            print(f"mass-ask with xargs")
+            time.sleep(1)
+            asyncio.run(self.mass_ask_xargs(args))
+        else:
+            print(f"mass-ask without xargs")
+            time.sleep(1)
+            asyncio.run(self.mass_ask(args))
+    
+    def stdin_callback(self):
+        print(f"stdin_callback")
+        line = sys.stdin.readline()
+        if line == '':
+            loop = asyncio.get_running_loop()
+            loop.remove_reader(sys.stdin)
+            self.completed = True
+            return
+        line = line.strip()
+        if line == '': # don't ask for empty lines
+            return
+        question = self.template.replace(self.args.xargs_I, line)
+        task = asyncio.create_task(LLM().ask_async(question, semaphore=self.semaphore))
+        self.tasks.append(task)
+    
+    # if -I
+    async def mass_ask_xargs(self, args):
+        self.tasks = []
+        self.semaphore = asyncio.Semaphore(args.parallelism)
+        self.template = ' '.join(args.question)
+        self.completed = False
+        loop = asyncio.get_running_loop()
+        loop.add_reader(sys.stdin, self.stdin_callback)
+        while True:
+            if self.completed:
+                print(f"mass_ask_xargs completed")
+                tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+                await asyncio.gather(*tasks)
+                #asyncio.get_running_loop().stop() 
+                break
+            print(f"mass_ask_xargs sleep")
+            await asyncio.sleep(1)
+    
+    # default, if not -I
+    async def mass_ask(self, args):
+        debug(f"{self.command_name} executed with arguments: {args}")
+        self.semaphore = asyncio.Semaphore(args.parallelism)
+        coroutines = []
+        question = ' '.join(args.question)
+        for i in range(args.count):
+            async with self.semaphore:
+                task = LLM().ask_async(question)
+                coroutines.append(task)
+        results = await asyncio.gather(*coroutines)
+
+
 class MassUpdateFile(Command, _LanguageHelpers, _PythonCommandHelpers):
     # TODO make update-file less language-centric to support other file types
     # TODO decide how multiple files shall be specified on cmdline. Single argument instruction?
@@ -1072,6 +1141,15 @@ class MassUpdateFile(Command, _LanguageHelpers, _PythonCommandHelpers):
     def func(self, args):
         debug(f"{self.command_name} executed with arguments: {args}")
         asyncio.run(self.mass_update_file(args))
+
+    async def mass_update_file(self, args):
+        coroutines = []
+        for file_path in args.files:
+            print(f"Updating file `{file_path}`")
+            update_file_args = copy.copy(args)
+            update_file_args.file_path = file_path
+            coroutines.append(self._update_file(update_file_args))
+        await asyncio.gather(*coroutines)
     
     async def _update_file(self, args):
         debug(f"{self.command_name} executed with arguments: {args}")
@@ -1115,14 +1193,6 @@ class MassUpdateFile(Command, _LanguageHelpers, _PythonCommandHelpers):
                 answer = LLM(state_name=answer.state_name).ask(new_instruction)
                 print(answer.highlight())
     
-    async def mass_update_file(self, args):
-        coroutines = []
-        for file_path in args.files:
-            print(f"Updating file `{file_path}`")
-            update_file_args = copy.copy(args)
-            update_file_args.file_path = file_path
-            coroutines.append(self._update_file(update_file_args))
-        await asyncio.gather(*coroutines)
 
 
 
@@ -1207,6 +1277,7 @@ def main():
     ask = AskCommand(subparsers)
     summarize_file = SummarizeFileCommand(subparsers)
     update_file = UpdateFileCommand(subparsers)
+    mass_ask = MassAsk(subparsers)
     mass_update_file = MassUpdateFile(subparsers)
     update_func = UpdateFunctionCommand(subparsers)
     update_class = UpdateClassCommand(subparsers)
